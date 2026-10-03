@@ -23,7 +23,7 @@
 - `docker exec` - runs a command in a running container
 - `docker logs` - displays the logs of a container
 
-
+# Examples
 - `docker run -d -p 5433:5432 --name pg-test -e POSTGRES_PASSWORD=testing postgres:18` - starts a new container in detached mode with port mapping, assigns a name, and sets the environment variable POSTGRES_PASSWORD
 - `docker exec -it pg-test psql -U postgres` - runs a command in a running container
 - `docker logs pg-test` - displays the logs of a container
