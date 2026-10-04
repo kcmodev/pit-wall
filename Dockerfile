@@ -19,5 +19,5 @@ EXPOSE 8080
 # Exec form (JSON array) or shell form? Decide, and know why.
 # If it is run in shell form java becomes a child process and when docker stop is executed it will have to wait 10 seconds before everything closes since the shell does not pass on SIGTERM and java will never hear it.
 # i accidentially fixed this by using exec due to the ide suggestion which replaces the shell process with java. my original entrypoint was 'exec java -jar ingest-service.jar'
-# this final form is the correct implementation to run it as PID 1 so it receives SIGTERM when executing docker stop to shit down gracefully with the tradeoff being losing shell features like $VAR expansion
+# this final form is the correct implementation to run it as PID 1 so it receives SIGTERM when executing docker stop to shut down gracefully with the tradeoff being losing shell features like $VAR expansion
 ENTRYPOINT ["java", "-jar", "ingest-service.jar"]
