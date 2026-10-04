@@ -27,6 +27,14 @@ dependencies {
 	testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 
+tasks.bootJar {
+	archiveFileName = "ingest-service.jar"
+}
+
+tasks.jar {
+	enabled = false
+}
+
 tasks.withType<Test> {
 	useJUnitPlatform()
 }
