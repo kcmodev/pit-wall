@@ -50,8 +50,6 @@ A JDK image includes the compiler and dev tools, which your container never uses
 
 When you run docker stop, Docker sends SIGTERM to PID 1, the first process in the container. If PID 1 doesn't exit within 10 seconds, Docker sends SIGKILL.
 
-- Shell form (ENTRYPOINT java -jar app.jar): Docker actually runs /bin/sh -c "java -jar app.jar". sh becomes PID 1 and Java is its child. sh doesn't pass SIGTERM on, so Java never hears it. After 10 seconds it gets killed, and Spring's graceful shutdown (finishing  
-  in-flight requests, closing DB connections) never runs.
-- exec replaces the shell process with Java, so Java becomes PID 1 and receives the signal.
-- Exec form (ENTRYPOINT ["java", "-jar", "app.jar"]): no shell is involved; Docker starts Java directly as PID 1. This is the conventional choice because it gets the same result without the trick. The tradeoff is that you lose shell features like $VAR expansion, but
-  you don't need those here.  
+- Shell form (ENTRYPOINT java -jar ingest-service.jar): Docker actually runs `/bin/sh -c "java -jar ingest-service.jar`. `sh` becomes PID 1 and Java is its child. `sh` doesn't pass SIGTERM on, so Java never hears it. After 10 seconds it gets killed, and Spring's graceful shutdown (finishing in-flight requests, closing DB connections) never runs.
+- `exec java -jar ingest-service.jar` replaces the shell process with Java, so Java becomes PID 1 and receives the signal.
+- Exec form (ENTRYPOINT ["java", "-jar", "ingest-service.jar"]): no shell is involved; Docker starts Java directly as PID 1. The tradeoff is that you lose shell features like $VAR expansion.
