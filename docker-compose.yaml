@@ -1,0 +1,27 @@
+services:
+  ingest-service:
+    build:
+      context: services/ingest-service
+    depends_on:
+      - postgres
+    ports:
+      - "8080:8080"
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${DATASOURCE_DB?set it in .env}
+      SPRING_DATASOURCE_USERNAME: ${DATASOURCE_USERNAME?set it in .env}
+      SPRING_DATASOURCE_PASSWORD: ${DATASOURCE_PASSWORD?set it in .env}
+
+  postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_DB: ${DATASOURCE_DB}
+      POSTGRES_USER: ${DATASOURCE_USERNAME}
+      POSTGRES_PASSWORD: ${DATASOURCE_PASSWORD}
+    ports:
+      # Published for local DB tools; bound to 127.0.0.1 so it isn't reachable from the network.
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql
+
+volumes:
+  postgres_data:
