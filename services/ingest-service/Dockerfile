@@ -5,7 +5,6 @@ WORKDIR /workspace
 
 COPY gradlew build.gradle.kts settings.gradle.kts ./
 COPY gradle gradle
-
 COPY src src
 
 # Cache mount keeps Gradle's distribution and dependency cache between builds (not stored in the image).
@@ -20,11 +19,18 @@ FROM eclipse-temurin:21.0.12.1_1-jre-noble@sha256:22138efd69393501fccd8176ae16b0
 
 WORKDIR /app
 
+RUN groupadd --gid 10001 app \
+ && useradd --uid 10001 --gid app --no-create-home --shell /usr/sbin/nologin app
+
 COPY --from=build /workspace/extracted/dependencies/ ./
 COPY --from=build /workspace/extracted/spring-boot-loader/ ./
 COPY --from=build /workspace/extracted/snapshot-dependencies/ ./
 COPY --from=build /workspace/extracted/application/ ./
 
+USER 10001:10001
+
 EXPOSE 8080
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 CMD ["curl", "-fsS", "http://localhost:8080/actuator/health"]
 
 ENTRYPOINT ["java", "-jar", "ingest-service.jar"]
