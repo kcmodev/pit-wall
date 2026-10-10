@@ -7,7 +7,7 @@ services:
     ports:
       - "8080:8080"
     environment:
-      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${DATASOURCE_DB:?set it in .env}
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${DATASOURCE_DB_NAME:?set it in .env}
       SPRING_DATASOURCE_USERNAME: ${DATASOURCE_USERNAME:?set it in .env}
       SPRING_DATASOURCE_PASSWORD: ${DATASOURCE_PASSWORD:?set it in .env}
       MANAGEMENT_ENDPOINT_HEALTH_SHOW_DETAILS: always
@@ -15,7 +15,7 @@ services:
   postgres:
     image: postgres:18
     environment:
-      POSTGRES_DB: ${DATASOURCE_DB}
+      POSTGRES_DB: ${DATASOURCE_DB_NAME}
       POSTGRES_USER: ${DATASOURCE_USERNAME}
       POSTGRES_PASSWORD: ${DATASOURCE_PASSWORD}
     ports:

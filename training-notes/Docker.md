@@ -8,8 +8,8 @@
 - `docker rm -f <container_name>` - forcefully removes the container
 - `docker rm -v <container_name>` - removes the container and its volumes
 - `docker restart <container_name>` - restarts the container
-- `docker compose up` - starts the containers defined with the associated compose file
-- `docker compose down` - stops and removes the containers defined with the assocaited compose file
+- `docker compose up` - starts the containers defined with the associated docker-compose file
+- `docker compose down` - stops and removes the containers defined with the associated docker-compose file
 - `docker volume` - manages volumes
 - `docker volume ls` - lists volumes
 - `docker volume rm <volume_name>` - removes the volume
@@ -25,6 +25,12 @@
 - `docker build` - builds an image from a Dockerfile
 - `docker build .` - builds an image from a Dockerfile in the current directory
 - `docker build -t <image_name>` - builds an image from a Dockerfile in the current directory and assigns a name to the image
+
+## Compose
+- `docker compose up -d --build` - starts containers defined in a Compose file in detached mode and rebuilds images if necessary
+- `docker compose logs -f ingest-service` - displays the logs of a container in real-time
+- `docker compose exec postgres psql -U <your-db-user> -d <your-db-name>` - runs a command to connect to postgres in a container
+- `docker compose exec postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"'` - runs a command to connect to postgres in a container
 
 ## Examples
 - `docker run -d -p 5433:5432 --name pg-test -e POSTGRES_PASSWORD=testing postgres:18` - starts a new container in detached mode with port mapping, assigns a name, and sets the environment variable POSTGRES_PASSWORD
