@@ -3,7 +3,8 @@ services:
     build:
       context: services/ingest-service
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
     ports:
       - "8080:8080"
     environment:
@@ -14,6 +15,14 @@ services:
 
   postgres:
     image: postgres:18
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      start_interval: 1s
+      retries: 5
+      start_period: 30s
+      timeout: 10s
+    restart: unless-stopped
     environment:
       POSTGRES_DB: ${DATASOURCE_DB_NAME}
       POSTGRES_USER: ${DATASOURCE_USERNAME}
