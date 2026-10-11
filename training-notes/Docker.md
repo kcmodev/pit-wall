@@ -59,3 +59,7 @@ When you run docker stop, Docker sends SIGTERM to PID 1, the first process in th
 - Shell form (ENTRYPOINT java -jar ingest-service.jar): Docker actually runs `/bin/sh -c "java -jar ingest-service.jar`. `sh` becomes PID 1 and Java is its child. `sh` doesn't pass SIGTERM on, so Java never hears it. After 10 seconds it gets killed, and Spring's graceful shutdown (finishing in-flight requests, closing DB connections) never runs.
 - `exec java -jar ingest-service.jar` replaces the shell process with Java, so Java becomes PID 1 and receives the signal.
 - Exec form (ENTRYPOINT ["java", "-jar", "ingest-service.jar"]): no shell is involved; Docker starts Java directly as PID 1. The tradeoff is that you lose shell features like $VAR expansion.
+
+## Healthcheck
+
+Restart policies only respond to a container exiting. “Unhealthy” is a status label. Plain Docker and Compose display it and let `depends_on` use it, but no restart policy acts on it. Orchestrators like Kubernetes do restart containers based on health, through liveness probes.
