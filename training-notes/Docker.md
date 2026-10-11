@@ -8,8 +8,8 @@
 - `docker rm -f <container_name>` - forcefully removes the container
 - `docker rm -v <container_name>` - removes the container and its volumes
 - `docker restart <container_name>` - restarts the container
-- `docker compose up` - starts the containers defined with the associated docker-compose file
-- `docker compose down` - stops and removes the containers defined with the associated docker-compose file
+- `docker compose up` - starts the containers defined with the associated compose file
+- `docker compose down` - stops and removes the containers defined with the associated compose file
 - `docker volume` - manages volumes
 - `docker volume ls` - lists volumes
 - `docker volume rm <volume_name>` - removes the volume

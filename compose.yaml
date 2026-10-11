@@ -5,7 +5,7 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-    restart: on-failure
+    restart: unless-stopped
     ports:
       - "8080:8080"
     environment:
@@ -22,8 +22,8 @@ services:
       start_interval: 1s
       retries: 5
       start_period: 30s
-      timeout: 10s
-    restart: on-failure
+      timeout: 5s
+    restart: unless-stopped
     environment:
       POSTGRES_DB: ${DATASOURCE_DB_NAME}
       POSTGRES_USER: ${DATASOURCE_USERNAME}
