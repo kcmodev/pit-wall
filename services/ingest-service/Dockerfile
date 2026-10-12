@@ -3,7 +3,8 @@ FROM eclipse-temurin:21.0.12.1_1-jdk-noble@sha256:70898f0f893a6b772a0f29834d8b02
 
 WORKDIR /workspace
 
-COPY gradlew build.gradle.kts settings.gradle.kts ./
+COPY --chmod=0755 gradlew ./
+COPY build.gradle.kts settings.gradle.kts ./
 COPY gradle gradle
 COPY src src
 
