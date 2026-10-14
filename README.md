@@ -92,3 +92,52 @@ After code changes, rebuild with `docker compose up --build --wait`. This doesn'
 - **`up` fails with `port is already allocated`:** another process is using `8080` or `5433`. Stop it, or change the left side of the mapping in `compose.yaml` (for example, `"127.0.0.1:8081:8080"`).
 - **The ingest service is in a restart loop, and `docker compose logs ingest-service` shows `password authentication failed`:** `.env` changed after the database was initialized. Run `docker compose down -v` (this **deletes DB data**), then [Start](#start) again.
 - **The ingest service is in a restart loop, and `docker compose logs ingest-service` shows `UnknownHostException: postgres`:** the Postgres container isn't running. Start the whole stack with `docker compose up --wait` rather than starting a single service.
+
+## Local Kubernetes cluster (kind)
+
+[kind](https://kind.sigs.k8s.io/) runs a Kubernetes cluster inside Docker, with each node as a container. `k8s/kind/cluster.yaml` defines a two-node cluster named `pit-wall`: one control-plane node and one worker. Nothing is deployed to it yet. For now, a healthy cluster means both nodes are `Ready` and the system pods are running.
+
+### Prerequisites
+
+| Tool          | Minimum version | Check with                 |
+|---------------|-----------------|----------------------------|
+| Docker Engine | 25.0            | `docker version`           |
+| kind          | 0.33.0          | `kind version`             |
+| kubectl       | 1.36            | `kubectl version --client` |
+
+- **Why kind 0.33.0?** It's the first kind release that ships the `kindest/node:v1.37.0` image pinned in `cluster.yaml`.
+- **Why kubectl 1.36?** kubectl supports clusters one minor version above or below its own, so 1.36 to 1.38 works with a 1.37 cluster.
+
+### Create
+
+From the repo root:
+
+```sh
+kind create cluster --config k8s/kind/cluster.yaml
+```
+
+This starts the `pit-wall-control-plane` and `pit-wall-worker` containers, adds a `kind-pit-wall` context to your kubeconfig, and switches kubectl to it. The first run downloads the node image, so expect a few minutes. After that, creating the cluster takes under a minute.
+
+### Verify
+
+```sh
+kubectl wait --for=condition=Ready nodes --all --timeout=120s
+kubectl get pods -A
+```
+
+`kind create` only waits for the control plane, so `kubectl wait` blocks until the worker is `Ready` too. Every pod in `kube-system` and `local-path-storage` should show `Running`.
+
+If the output shows a different cluster, run `kubectl config current-context`. It should print `kind-pit-wall`. Switch with `kubectl config use-context kind-pit-wall`.
+
+### Delete
+
+```sh
+kind delete cluster --name pit-wall
+```
+
+**This deletes the cluster and everything running in it**, and removes the `kind-pit-wall` context. `--name` is required, because `kind delete` doesn't read `cluster.yaml` and otherwise looks for a cluster named `kind`.
+
+### Troubleshooting
+
+- **`kind create` fails with `node(s) already exist for a cluster with the name "pit-wall"`:** the cluster already exists. Use it as is, or [delete](#delete) it and create it again.
+- **kubectl fails with `The connection to the server 127.0.0.1:<port> was refused`:** the node containers are stopped, usually after Docker restarted. Run `docker start pit-wall-control-plane pit-wall-worker`, give it a minute, then [verify](#verify-1). If pods don't return to `Running`, delete the cluster and create it again.
