@@ -45,9 +45,9 @@ Replace each `<placeholder>` in `.env`. The values are for local use only, so pi
 
 | Variable              | What it's for                                                       | Example     |
 |-----------------------|---------------------------------------------------------------------|-------------|
-| `DATASOURCE_DB_NAME`  | Database Postgres creates on first start. The app connects to it.   | `pitwall`   |
-| `DATASOURCE_USERNAME` | Postgres user created on first start. The app logs in as this user. | `pitwall`   |
-| `DATASOURCE_PASSWORD` | Password for that user. Used by both containers.                    | `change-me` |
+| `POSTGRES_DB`         | Database Postgres creates on first start. The app connects to it.   | `pitwall`   |
+| `POSTGRES_USER`       | Postgres user created on first start. The app logs in as this user. | `pitwall`   |
+| `POSTGRES_PASSWORD`   | Password for that user. Used by both containers.                    | `change-me` |
 
 > [!NOTE]
 > If a value is missing, `docker compose` stops with `set it in .env`. `.env` is gitignored, so credentials stay out of git.
