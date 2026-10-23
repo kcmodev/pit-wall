@@ -1,0 +1,24 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ingest-service
+  namespace: pit-wall
+  labels:
+    app.kubernetes.io/name: ingest-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ingest-service   # how the Deployment finds its pods
+  template:                                    # the pod blueprint
+    metadata:
+      labels:
+        app.kubernetes.io/name: ingest-service # must match the selector above
+    spec:
+      containers:
+        - name: ingest-service
+          image: pit-wall/ingest-service:0.1
+          imagePullPolicy: Never
+          ports:
+            - name: http
+              containerPort: 8080 # default spring boot port
