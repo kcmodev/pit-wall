@@ -175,18 +175,15 @@ kind load docker-image pit-wall/ingest-service:0.2.0 --name pit-wall
 
 ### 2. Create the database secret
 
+From the repo root:
+
 ```bash
 kubectl create namespace pit-wall
-kubectl create secret generic postgres-credentials -n pit-wall \
-  --from-literal=POSTGRES_USER=<user> \
-  --from-literal=POSTGRES_PASSWORD=<password> \
-  --from-literal=POSTGRES_DB=pitwall
+kubectl create secret generic postgres-credentials -n pit-wall --from-env-file=.env
 ```
 
 > [!NOTE]
-> Created by command so credentials never land in git.
-> Keep `POSTGRES_DB=pitwall`. The Deployment's JDBC URL hardcodes that database name.
-> Any values work. To match your Compose setup, reuse the values from `.env`.
+> Uses the same `.env` as the Compose setup, so create it first (see [Configure](#1-configure)). Each line becomes a key in the secret, and credentials never land in git.
 
 ### 3. Deploy
 
