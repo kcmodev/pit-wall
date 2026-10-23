@@ -17,7 +17,7 @@ spec:
     spec:
       containers:
         - name: ingest-service
-          image: pit-wall/ingest-service:0.2
+          image: pit-wall/ingest-service
           imagePullPolicy: Never
           ports:
             - name: http
