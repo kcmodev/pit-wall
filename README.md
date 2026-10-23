@@ -2,9 +2,24 @@
 
 **Pit Wall** is an event-driven telemetry platform for Formula 1 data that I'm building in stages. The target architecture: an ingest service replays historical session data from the OpenF1 API into Kafka, and a stream processor turns raw car and timing events into race metrics. The results will be stored in Postgres, served through a REST API and visualized in Grafana dashboards. The system will run on Kubernetes, with GitHub Actions handling builds, tests and deployments. I'm building it to get hands-on experience with containers, event streaming and orchestration, using real-world data I genuinely enjoy working with.
 
+## Status
+
+- [x] **Docker:** ingest-service containerized, running with PostgreSQL via Docker Compose
+- [x] **Kubernetes:** running on a local kind cluster, deployed with Kustomize
+- [ ] **Kafka:** ingest-service replays OpenF1 session data into Kafka
+- [ ] Stream processing, REST API, Grafana dashboards, CI/CD with GitHub Actions
+
+## Contents
+
+- [Running locally (Docker Compose)](#running-locally)
+- [Local Kubernetes cluster (kind)](#local-kubernetes-cluster-kind)
+- [Deploy to the local cluster](#deploy-to-the-local-cluster)
+
+---
+
 ## Running locally
 
-The current stack is two containers managed by Docker Compose: `ingest-service` (a Spring Boot app) and `postgres` (Postgres 18). The ingest service doesn't pull F1 data yet. For now, a healthy stack means the app is up, connected to Postgres and has applied its database migrations.
+Runs ingest-service (Spring Boot) and PostgreSQL 18 with Docker Compose. The ingest service doesn't pull F1 data yet. For now, a healthy stack means the app is up, connected to Postgres, and has applied its database migrations.
 
 ### Prerequisites
 
@@ -12,90 +27,85 @@ The current stack is two containers managed by Docker Compose: `ingest-service` 
 |-------------------------|-----------------|--------------------------|
 | Git                     | any             | `git --version`          |
 | Docker Engine           | 25.0            | `docker version`         |
-| Docker Compose (plugin) | 2.24.0          | `docker compose version` |
+| Docker Compose (plugin) | 2.20.2          | `docker compose version` |
 
-A current Docker Desktop includes both Docker requirements. The version floors come from the `start_interval` healthcheck option in `compose.yaml`, which older versions don't support.
+> [!NOTE]
+> A current Docker Desktop covers both Docker requirements. The version floors come from the `start_interval` healthcheck option in `compose.yaml`, which older versions don't support.
+> You don't need a local JDK or Gradle. The app is compiled inside Docker.
 
-You don't need a local JDK or Gradle, because the app is compiled inside Docker.
+### 1. Configure
 
-### Configuration
-
-Clone the repo and create your `.env` from the template:
-
-```sh
+```bash
 git clone https://github.com/kcmodev/pit-wall.git
 cd pit-wall
 cp .env.example .env
 ```
 
-Open `.env` and replace each `<placeholder>` with a value of your choice. These values are for local use only, so pick anything:
+Replace each `<placeholder>` in `.env`. The values are for local use only, so pick anything:
 
-| Variable              | What it's for                                                                 | Example     |
-|-----------------------|-------------------------------------------------------------------------------|-------------|
-| `DATASOURCE_DB_NAME`  | Name of the database Postgres creates on first start. The app connects to it. | `pitwall`   |
-| `DATASOURCE_USERNAME` | Postgres user created on first start. The app logs in as this user.           | `pitwall`   |
-| `DATASOURCE_PASSWORD` | Password for that user. Used by both containers.                              | `change-me` |
+| Variable              | What it's for                                                       | Example     |
+|-----------------------|---------------------------------------------------------------------|-------------|
+| `DATASOURCE_DB_NAME`  | Database Postgres creates on first start. The app connects to it.   | `pitwall`   |
+| `DATASOURCE_USERNAME` | Postgres user created on first start. The app logs in as this user. | `pitwall`   |
+| `DATASOURCE_PASSWORD` | Password for that user. Used by both containers.                    | `change-me` |
 
-If any value is missing, `docker compose` stops with `set it in .env`. `.env` is gitignored, so don't commit real credentials anywhere else.
+> [!NOTE]
+> If a value is missing, `docker compose` stops with `set it in .env`. `.env` is gitignored, so credentials stay out of git.
+> Postgres only reads these values when it initializes an empty data volume. To change them later, [reset the database](#stop-and-reset) first.
 
-Postgres only reads these values when it initializes an empty data volume. If you change them later, you have to reset the database (see [Stop and reset](#stop-and-reset)) before they take effect.
+### 2. Start
 
-### Start
-
-```sh
+```bash
 docker compose up --build --wait
 ```
 
-The first run builds the app image and initializes the database, so expect a few minutes. Later runs reuse the build cache. On startup, Flyway applies the database migrations. `--wait` runs the stack in the background and returns only after both containers are healthy. If either one doesn't become healthy, the command fails.
+> [!NOTE]
+> `--wait` runs the stack in the background and returns once both containers are healthy, or fails if either one doesn't get there. The first run builds the image and initializes the database, so expect a few minutes. Flyway applies the migrations on startup.
+> If it fails with `port is already allocated`, another process is using `8080` or `5433`. Stop it, or change the host side of the mapping in `compose.yaml` (e.g. `"127.0.0.1:8081:8080"`).
+> If ingest-service keeps restarting, check `docker compose logs ingest-service`. `password authentication failed` means `.env` changed after the database was initialized: run `docker compose down -v` (**deletes DB data**) and start again. `UnknownHostException: postgres` means the Postgres container isn't running: run `docker compose up --wait`.
 
-### Verify
+### 3. Verify
 
-```sh
+```bash
 docker compose ps
+curl -s http://127.0.0.1:8080/actuator/health
 ```
 
-Both services should show `Up ... (healthy)`. Then query the app directly:
+Both services should show `Up ... (healthy)`. In the health response, expect `"status":"UP"` at the top level and `"db":{...,"status":"UP"}` inside `components`, which confirms the app can query Postgres.
 
-```sh
-curl http://127.0.0.1:8080/actuator/health
+To confirm the migrations ran (expect `sessions` and `flyway_schema_history`):
+
+```bash
+docker compose exec postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "\dt"'
 ```
 
-Look for `"status":"UP"` at the top level, and `"db":{...,"status":"UP"}` inside `components`. That confirms the app is reachable from your machine and can query Postgres.
+| Service          | Host address     | Container port |
+|------------------|------------------|----------------|
+| `ingest-service` | `127.0.0.1:8080` | `8080`         |
+| `postgres`       | `127.0.0.1:5433` | `5432`         |
 
-Optionally, run `docker compose exec postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "\dt"'` to confirm the migrations ran. You should see `sessions` and `flyway_schema_history`.
+> [!NOTE]
+> Postgres is published on 5433 to avoid clashing with a local Postgres on 5432. Point DB tools at `127.0.0.1:5433` with the credentials from `.env`.
+> Both ports bind to `127.0.0.1`, so only your machine can reach them. Without a host IP, Docker publishes on every network interface.
 
 ### Stop and reset
 
-| Command                  | Containers           | Database data         |
-|--------------------------|----------------------|-----------------------|
-| `docker compose stop`    | Stopped, kept        | Kept                  |
-| `docker compose down`    | Removed              | Kept                  |
-| `docker compose down -v` | Removed              | **Deleted**           |
+| Command                  | Containers    | Database data |
+|--------------------------|---------------|---------------|
+| `docker compose stop`    | Stopped, kept | Kept          |
+| `docker compose down`    | Removed       | Kept          |
+| `docker compose down -v` | Removed       | **Deleted**   |
 
-- **To stop for the day,** use `docker compose stop` or `docker compose down`. Your data lives in the `postgres_data` volume, and both commands leave it alone. Run `docker compose up --wait` to start again.
-- **To wipe the database,** use `docker compose down -v`. **This permanently deletes the `postgres_data` volume and everything in it.** The next `up` starts with an empty volume, so Postgres re-initializes from `.env` and Flyway runs every migration again. Use this after changing `.env` credentials or to get a clean slate.
+To start again after `stop` or `down`, run `docker compose up --wait`. After code changes, run `docker compose up --build --wait`. Neither touches your data.
 
-After code changes, rebuild with `docker compose up --build --wait`. This doesn't touch your data.
+> [!WARNING]
+> `docker compose down -v` permanently deletes the `postgres_data` volume. The next `up` re-initializes Postgres from `.env` and Flyway runs every migration again. Use it after changing `.env` credentials or to get a clean slate.
 
-### Ports
-
-| Service          | Host address     | Container port | Reachable from         |
-|------------------|------------------|----------------|------------------------|
-| `ingest-service` | `127.0.0.1:8080` | `8080`         | Your machine only      |
-| `postgres`       | `127.0.0.1:5433` | `5432`         | Your machine only      |
-
-- **Why 5433?** It avoids clashing with a local Postgres on the default 5432. Point DB tools at `127.0.0.1:5433` with the credentials from `.env`.
-- **Why `127.0.0.1`?** Without a host IP, Docker publishes on every network interface, so any device on your network could reach it.
-
-### Troubleshooting
-
-- **`up` fails with `port is already allocated`:** another process is using `8080` or `5433`. Stop it, or change the left side of the mapping in `compose.yaml` (for example, `"127.0.0.1:8081:8080"`).
-- **The ingest service is in a restart loop, and `docker compose logs ingest-service` shows `password authentication failed`:** `.env` changed after the database was initialized. Run `docker compose down -v` (this **deletes DB data**), then [Start](#start) again.
-- **The ingest service is in a restart loop, and `docker compose logs ingest-service` shows `UnknownHostException: postgres`:** the Postgres container isn't running. Start the whole stack with `docker compose up --wait` rather than starting a single service.
+---
 
 ## Local Kubernetes cluster (kind)
 
-[kind](https://kind.sigs.k8s.io/) runs a Kubernetes cluster inside Docker, with each node as a container. `k8s/kind/cluster.yaml` defines a two-node cluster named `pit-wall`: one control-plane node and one worker. Nothing is deployed to it yet. For now, a healthy cluster means both nodes are `Ready` and the system pods are running.
+Creates a two-node [kind](https://kind.sigs.k8s.io/) cluster named `pit-wall` (one control-plane node, one worker), defined in `k8s/kind/cluster.yaml`. kind runs each node as a Docker container. For now, a healthy cluster means both nodes are `Ready` and the system pods are running.
 
 ### Prerequisites
 
@@ -105,39 +115,124 @@ After code changes, rebuild with `docker compose up --build --wait`. This doesn'
 | kind          | 0.33.0          | `kind version`             |
 | kubectl       | 1.36            | `kubectl version --client` |
 
-- **Why kind 0.33.0?** It's the first kind release that ships the `kindest/node:v1.37.0` image pinned in `cluster.yaml`.
-- **Why kubectl 1.36?** kubectl supports clusters one minor version above or below its own, so 1.36 to 1.38 works with a 1.37 cluster.
+> [!NOTE]
+> kind 0.33.0 is the first release built for the `kindest/node:v1.37.0` image pinned in `cluster.yaml`.
+> kubectl supports clusters one minor version above or below its own, so 1.36 to 1.38 works with a 1.37 cluster.
 
-### Create
+### 1. Create
 
 From the repo root:
 
-```sh
+```bash
 kind create cluster --config k8s/kind/cluster.yaml
 ```
 
-This starts the `pit-wall-control-plane` and `pit-wall-worker` containers, adds a `kind-pit-wall` context to your kubeconfig, and switches kubectl to it. The first run downloads the node image, so expect a few minutes. After that, creating the cluster takes under a minute.
+> [!NOTE]
+> This starts the `pit-wall-control-plane` and `pit-wall-worker` containers, adds a `kind-pit-wall` context to your kubeconfig, and switches kubectl to it. The first run downloads the node image, so expect a few minutes.
+> If it fails with `node(s) already exist for a cluster with the name "pit-wall"`, the cluster already exists. Use it as is, or [delete](#delete) it and create it again.
 
-### Verify
+### 2. Verify
 
-```sh
+```bash
 kubectl wait --for=condition=Ready nodes --all --timeout=120s
 kubectl get pods -A
 ```
 
-`kind create` only waits for the control plane, so `kubectl wait` blocks until the worker is `Ready` too. Every pod in `kube-system` and `local-path-storage` should show `Running`.
+Every pod in `kube-system` and `local-path-storage` should show `Running`.
 
-If the output shows a different cluster, run `kubectl config current-context`. It should print `kind-pit-wall`. Switch with `kubectl config use-context kind-pit-wall`.
+> [!NOTE]
+> `kind create` doesn't wait for nodes to become `Ready`, so `kubectl wait` blocks until both are.
+> If the output shows a different cluster, check `kubectl config current-context`. It should print `kind-pit-wall`. Switch with `kubectl config use-context kind-pit-wall`.
+> If kubectl fails with `The connection to the server 127.0.0.1:<port> was refused`, the node containers are stopped, usually after Docker restarted. Run `docker start pit-wall-control-plane pit-wall-worker`, wait a minute, and verify again. If pods don't return to `Running`, delete the cluster and create it again.
 
 ### Delete
 
-```sh
+```bash
 kind delete cluster --name pit-wall
 ```
 
-**This deletes the cluster and everything running in it**, and removes the `kind-pit-wall` context. `--name` is required, because `kind delete` doesn't read `cluster.yaml` and otherwise looks for a cluster named `kind`.
+> [!WARNING]
+> Deletes the cluster and everything running in it, and removes the `kind-pit-wall` context. `--name` is required: `kind delete` doesn't read `cluster.yaml`, and otherwise targets a cluster named `kind`.
 
-### Troubleshooting
+---
 
-- **`kind create` fails with `node(s) already exist for a cluster with the name "pit-wall"`:** the cluster already exists. Use it as is, or [delete](#delete) it and create it again.
-- **kubectl fails with `The connection to the server 127.0.0.1:<port> was refused`:** the node containers are stopped, usually after Docker restarted. Run `docker start pit-wall-control-plane pit-wall-worker`, give it a minute, then [verify](#verify-1). If pods don't return to `Running`, delete the cluster and create it again.
+## Deploy to the local cluster
+
+Deploys ingest-service and PostgreSQL 18 into the `pit-wall` namespace, using the Kustomize manifests in `k8s/base`. Requires the kind cluster from the previous section.
+
+### 1. Build and load the image
+
+From the repo root:
+
+```bash
+docker build -t pit-wall/ingest-service:0.2 services/ingest-service
+kind load docker-image pit-wall/ingest-service:0.2 --name pit-wall
+```
+
+> [!NOTE]
+> There's no registry, so `kind load` copies the image into each node, and the Deployment uses `imagePullPolicy: Never`.
+> The tag must match `newTag` in `k8s/base/kustomization.yaml`. If `newTag` is no longer `0.2`, use its value in both commands. After code changes, build with a **new** tag and update `newTag`. Reusing a tag keeps the old image running.
+
+### 2. Create the database secret
+
+```bash
+kubectl create namespace pit-wall
+kubectl create secret generic postgres-credentials -n pit-wall \
+  --from-literal=POSTGRES_USER=<user> \
+  --from-literal=POSTGRES_PASSWORD=<password> \
+  --from-literal=POSTGRES_DB=pitwall
+```
+
+> [!NOTE]
+> Created by command so credentials never land in git.
+> Keep `POSTGRES_DB=pitwall`. The Deployment's JDBC URL hardcodes that database name.
+> Any values work. To match your Compose setup, reuse the values from `.env`.
+
+### 3. Deploy
+
+```bash
+kubectl apply -k k8s/base
+```
+
+> [!NOTE]
+> The first apply may warn that `namespaces/pit-wall` is missing the `last-applied-configuration` annotation, because step 2 created it. kubectl adds the annotation itself, so the warning is harmless.
+> On later runs, `statefulset.apps/postgres configured` may appear even when nothing changed (a known client-side apply quirk). `kubectl diff -k k8s/base` shows real changes; empty output means none.
+
+### 4. Verify
+
+```bash
+kubectl rollout status -n pit-wall statefulset/postgres --timeout=180s
+kubectl rollout status -n pit-wall deployment/ingest-service --timeout=180s
+kubectl get pods -n pit-wall
+```
+
+Both pods should show `1/1` under `READY`. Then check the health endpoint:
+
+```bash
+kubectl port-forward -n pit-wall deployment/ingest-service 8080:8080
+# in a second terminal
+curl -s http://127.0.0.1:8080/actuator/health
+```
+
+In the health response, expect `"status":"UP"` at the top level and `"db":{...,"status":"UP"}` inside `components`, which confirms the app can query Postgres. Stop `port-forward` with Ctrl-C.
+
+To confirm the migrations ran (expect `sessions` and `flyway_schema_history`):
+
+```bash
+kubectl exec -n pit-wall postgres-0 -- sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "\dt"'
+```
+
+> [!NOTE]
+> ingest-service may restart or show `0/1` until Postgres is ready. Flyway needs the database at startup, and the database is part of its readiness check.
+> If `port-forward` fails with "address already in use", stop whatever else is on port 8080 (e.g. `docker compose down`).
+
+### Remove
+
+```bash
+kubectl delete -k k8s/base
+```
+
+> [!WARNING]
+> Deletes the `pit-wall` namespace and everything in it, **including the database volume and the secret**. To redeploy, start again from step 2.
+
+---
