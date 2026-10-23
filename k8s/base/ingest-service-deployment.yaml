@@ -17,7 +17,7 @@ spec:
     spec:
       containers:
         - name: ingest-service
-          image: pit-wall/ingest-service:0.1
+          image: pit-wall/ingest-service:0.2
           imagePullPolicy: Never
           ports:
             - name: http
@@ -35,3 +35,22 @@ spec:
                 secretKeyRef:
                   name: postgres-credentials
                   key: POSTGRES_PASSWORD
+          startupProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: http
+            periodSeconds: 2
+            failureThreshold: 30     # allows up to 60s to start
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: http
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 3
