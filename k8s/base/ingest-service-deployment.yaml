@@ -22,6 +22,12 @@ spec:
           ports:
             - name: http
               containerPort: 8080 # default spring boot port
+          resources:
+            requests:
+              cpu: 250m          # a quarter of one CPU core
+              memory: 512Mi
+            limits:
+              memory: 512Mi
           env:
             - name: SPRING_DATASOURCE_URL
               value: jdbc:postgresql://postgres:5432/pitwall
@@ -35,6 +41,8 @@ spec:
                 secretKeyRef:
                   name: postgres-credentials
                   key: POSTGRES_PASSWORD
+            - name: JAVA_TOOL_OPTIONS
+              value: "-XX:MaxRAMPercentage=75.0"
           startupProbe:
             httpGet:
               path: /actuator/health/liveness

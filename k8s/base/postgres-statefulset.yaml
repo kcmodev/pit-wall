@@ -33,6 +33,12 @@ spec:
               command: [ "sh", "-c", "pg_isready -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\"" ]
             periodSeconds: 10
             timeoutSeconds: 5
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 256Mi
   volumeClaimTemplates:          # one disk per pod, kept across restarts
     - metadata:
         name: data
