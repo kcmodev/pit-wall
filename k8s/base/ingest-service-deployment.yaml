@@ -29,8 +29,13 @@ spec:
             limits:
               memory: 512Mi
           env:
+            - name: POSTGRES_DB
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-credentials
+                  key: POSTGRES_DB
             - name: SPRING_DATASOURCE_URL
-              value: jdbc:postgresql://postgres:5432/pitwall
+              value: jdbc:postgresql://postgres:5432/$(POSTGRES_DB)
             - name: SPRING_DATASOURCE_USERNAME
               valueFrom:
                 secretKeyRef:
