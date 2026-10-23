@@ -43,6 +43,9 @@ spec:
                   key: POSTGRES_PASSWORD
             - name: JAVA_TOOL_OPTIONS
               value: "-XX:MaxRAMPercentage=75.0"
+            # Matches compose.yaml. Local development only; a production overlay will drop it.
+            - name: MANAGEMENT_ENDPOINT_HEALTH_SHOW_DETAILS
+              value: "always"
           startupProbe:
             httpGet:
               path: /actuator/health/liveness
