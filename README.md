@@ -233,3 +233,41 @@ kubectl delete -k k8s/base
 > Deletes the `pit-wall` namespace and everything in it, **including the database volume and the secret**. To redeploy, start again from step 2.
 
 ---
+
+## 4. Kafka (local)
+
+Pit Wall uses Apache Kafka (KRaft mode, single combined broker/controller) as the event backbone between ingest and processing. It starts with the rest of the stack:
+
+    docker compose up -d
+    docker compose ps   # kafka should report "healthy"
+
+| Client location | Bootstrap address |
+|---|---|
+| Other Compose services | `kafka:29092` |
+| Host (IDE, local tools) | `127.0.0.1:9092` |
+
+> [!NOTE]
+> Automatic topic creation is disabled. Topics must be created explicitly, as they would be in production.
+
+### Inspecting Kafka with the CLI
+
+The Kafka CLI tools are included in the broker image, so no local install is needed:
+
+    # list topics
+    docker compose exec kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list
+
+    # create a topic
+    docker compose exec kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 \
+      --create --topic <topic> --partitions 3 --replication-factor 1
+
+    # describe a topic (partitions, leader, replicas)
+    docker compose exec kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --describe --topic <topic>
+
+    # check consumer group offsets and lag
+    docker compose exec kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --describe --group <group>
+
+> [!NOTE]
+> This is a single-node development setup: replication factor 1, no authentication, and combined broker/controller roles. Production Kafka runs at least three brokers with replication, TLS and authentication, separate controllers, and is typically a managed service.
+
+> [!WARNING]
+> The broker port is bound to `127.0.0.1` only. Do not expose it on other interfaces; the PLAINTEXT listeners have no authentication.
