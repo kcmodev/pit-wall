@@ -12,6 +12,7 @@ services:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:?set it in .env}
       SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:?set it in .env}
       SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:?set it in .env}
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       MANAGEMENT_ENDPOINT_HEALTH_SHOW_DETAILS: always
 
   postgres:
