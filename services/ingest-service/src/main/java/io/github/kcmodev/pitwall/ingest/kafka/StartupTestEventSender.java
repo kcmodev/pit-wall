@@ -1,5 +1,6 @@
 package io.github.kcmodev.pitwall.ingest.kafka;
 
+import org.apache.kafka.clients.producer.RecordMetadata;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.ApplicationArguments;
@@ -20,12 +21,14 @@ public class StartupTestEventSender implements ApplicationRunner {
 
     @Override
     public void run(ApplicationArguments args) {
-        kafkaTemplate.send(LAPS_TOPIC, "44", "test value")
+        String key = "44";
+        kafkaTemplate.send(LAPS_TOPIC, key, "test value")
                 .whenComplete((result, ex) -> {
                     if (ex != null) {
-                        LOGGER.error("Failed to send message to Kafka", ex);
+                        LOGGER.error("Failed to send message to Kafka topic: {}, key: {}", LAPS_TOPIC, key, ex);
                     } else {
-                        LOGGER.info("Message sent to Kafka partition {} with offset {}", result.getRecordMetadata().partition(), result.getRecordMetadata().offset());
+                        RecordMetadata recordMetadata = result.getRecordMetadata();
+                        LOGGER.info("Message sent to Kafka topic: {}, key: {}, partition: {} with offset: {}", recordMetadata.topic(), key, recordMetadata.partition(), recordMetadata.offset());
                     }
                 });
     }
