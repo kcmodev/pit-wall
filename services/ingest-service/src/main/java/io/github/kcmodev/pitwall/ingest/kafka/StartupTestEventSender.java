@@ -26,8 +26,8 @@ public class StartupTestEventSender implements ApplicationRunner {
     public void run(ApplicationArguments args) {
         LapEvent testEvent = new LapEvent(1, 10, 1, Instant.now(), 120.0,
                 40.0, 40.0, 40.0, false);
-        int key = testEvent.sessionKey();
-        kafkaTemplate.send(LAPS_TOPIC, String.valueOf(key), testEvent)
+        String key = testEvent.sessionKey() + "-" + testEvent.driverNumber();
+        kafkaTemplate.send(LAPS_TOPIC, key, testEvent)
                 .whenComplete((result, ex) -> {
                     if (ex != null) {
                         LOGGER.error("Failed to send message to Kafka topic: {}, key: {}", LAPS_TOPIC, key, ex);
