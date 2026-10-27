@@ -271,3 +271,12 @@ The Kafka CLI tools are included in the broker image, so no local install is nee
 
 > [!WARNING]
 > The broker port is bound to `127.0.0.1` only. Do not expose it on other interfaces; the PLAINTEXT listeners have no authentication.
+
+### Topics
+
+| Topic | Key | Value | Producer | Purpose |
+|---|---|---|---|---|
+| `f1.laps` | `<sessionKey>-<driverNumber>` | `LapEvent` (JSON) | ingest-service | One record per lap |
+
+> [!NOTE]
+> Kafka guarantees ordering per partition, and the key determines the partition. Keying by session and driver keeps each driver's laps in order within a session while spreading a session across partitions. Cross-driver metrics (gaps, positions) are computed downstream from stored data.
