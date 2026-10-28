@@ -3,6 +3,7 @@ package io.github.kcmodev.pitwall.ingest.openf1;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.stereotype.Component;
+import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestClient;
 
 import java.util.List;
@@ -19,10 +20,15 @@ public class OpenF1Client {
     }
 
     public List<OpenF1Lap> getLaps(int sessionKey) {
-        return Objects.requireNonNullElse(restClient.get()
-                .uri(uri -> uri.path("/laps").queryParam("session_key", sessionKey).build())
-                .retrieve()
-                .body(new ParameterizedTypeReference<>() {
-                }), List.of());
+        try {
+            return Objects.requireNonNullElse(restClient.get()
+                    .uri(uri -> uri.path("/laps").queryParam("session_key", sessionKey).build())
+                    .retrieve()
+                    .body(new ParameterizedTypeReference<>() {
+                    }), List.of());
+        } catch (HttpClientErrorException.NotFound e) {
+            // OpenF1 responds 404 when a query matches no results
+            return List.of();
+        }
     }
 }

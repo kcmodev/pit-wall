@@ -1,5 +1,6 @@
 package io.github.kcmodev.pitwall.ingest.replay;
 
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -16,13 +17,14 @@ public class ReplayController {
     }
 
     @PostMapping("/{sessionKey}")
-    public ResponseEntity<ReplayResponse> replay(@PathVariable int sessionKey) {
-        int lapCount = replayService.replay(sessionKey);
-        if (lapCount == 0) {
+    public ResponseEntity<ReplayResult> replay(@PathVariable int sessionKey) {
+        ReplayResult result = replayService.replay(sessionKey);
+        if (result.totalLaps() == 0) {
             return ResponseEntity.notFound().build();
         }
-        return ResponseEntity.accepted().body(new ReplayResponse(sessionKey, lapCount));
+        if (result.lapsFailed() > 0) {
+            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(result);
+        }
+        return ResponseEntity.ok(result);
     }
-
-    public record ReplayResponse(int sessionKey, int lapCount) {}
 }

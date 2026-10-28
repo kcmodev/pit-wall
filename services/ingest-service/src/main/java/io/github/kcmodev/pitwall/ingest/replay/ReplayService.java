@@ -9,6 +9,7 @@ import org.springframework.stereotype.Service;
 
 import java.util.Comparator;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 
 @Service
 public class ReplayService {
@@ -21,13 +22,25 @@ public class ReplayService {
         this.lapEventPublisher = lapEventPublisher;
     }
 
-    public int replay(int sessionKey) {
+    public ReplayResult replay(int sessionKey) {
         List<OpenF1Lap> laps = openF1Client.getLaps(sessionKey).stream()
                 .sorted(Comparator.comparingInt(OpenF1Lap::lapNumber)
                         .thenComparingInt(OpenF1Lap::driverNumber))
                 .toList();
-        laps.forEach(lap -> lapEventPublisher.publish(lap.toLapEvent()));
-        LOGGER.info("Replaying session {}: {} laps queued for publishing", sessionKey, laps.size());
-        return laps.size();
+
+        List<CompletableFuture<Boolean>> sends = laps.stream()
+                .map(lap -> lapEventPublisher.publish(lap.toLapEvent())
+                        .handle((result, ex) -> ex == null))
+                .toList();
+
+        CompletableFuture.allOf(sends.toArray(CompletableFuture[]::new)).join();
+
+        long confirmed = sends.stream().filter(CompletableFuture::join).count();
+        if (confirmed < laps.size()) {
+            LOGGER.warn("Partial results. Replayed session {}: {} laps failed out of {}", sessionKey, laps.size() - confirmed, laps.size());
+        } else {
+            LOGGER.info("Replayed session {}: {}/{} laps confirmed", sessionKey, confirmed, laps.size());
+        }
+        return new ReplayResult(sessionKey, laps.size(), (int) confirmed, laps.size() - (int) confirmed);
     }
 }
