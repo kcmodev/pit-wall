@@ -1,12 +1,12 @@
 # pit-wall
 
-**Pit Wall** is an event-driven telemetry platform for Formula 1 data that I'm building in stages. The target architecture: an ingest service replays historical session data from the OpenF1 API into Kafka, and a stream processor turns raw car and timing events into race metrics. The results will be stored in Postgres, served through a REST API and visualized in Grafana dashboards. The system will run on Kubernetes, with GitHub Actions handling builds, tests and deployments. I'm building it to get hands-on experience with containers, event streaming and orchestration, using real-world data I genuinely enjoy working with.
+**Pit Wall** is an event-driven telemetry platform for Formula 1 data that I'm building in stages. The target architecture: an ingest service replays historical session data from the OpenF1 API into Kafka, and a stream processor turns raw car and timing events into race metrics. The results will be stored in Postgres, served through a REST API, and visualized in Grafana dashboards. The system will run on Kubernetes, with GitHub Actions handling builds, tests, and deployments. I'm building it to get hands-on experience with containers, event streaming, and orchestration, using real-world data I genuinely enjoy working with.
 
 ## Status
 
 - [x] **Docker:** ingest-service containerized, running with PostgreSQL via Docker Compose
 - [x] **Kubernetes:** running on a local kind cluster, deployed with Kustomize
-- [ ] **Kafka:** ingest-service replays OpenF1 session data into Kafka
+- [x] **Kafka:** ingest-service replays OpenF1 lap data into Kafka on request (Docker Compose only for now)
 - [ ] Stream processing, REST API, Grafana dashboards, CI/CD with GitHub Actions
 
 ## Contents
@@ -14,12 +14,14 @@
 - [Running locally (Docker Compose)](#running-locally)
 - [Local Kubernetes cluster (kind)](#local-kubernetes-cluster-kind)
 - [Deploy to the local cluster](#deploy-to-the-local-cluster)
+- [Kafka (local)](#kafka-local)
+- [Replay a session](#replay-a-session)
 
 ---
 
 ## Running locally
 
-Runs ingest-service (Spring Boot) and PostgreSQL 18 with Docker Compose. The ingest service doesn't pull F1 data yet. For now, a healthy stack means the app is up, connected to Postgres, and has applied its database migrations.
+Runs ingest-service (Spring Boot), PostgreSQL 18, and Kafka with Docker Compose. A healthy stack means the app is up, connected to Postgres, and has applied its database migrations. To pull F1 data into Kafka, [replay a session](#replay-a-session).
 
 ### Prerequisites
 
@@ -27,11 +29,11 @@ Runs ingest-service (Spring Boot) and PostgreSQL 18 with Docker Compose. The ing
 |-------------------------|-----------------|--------------------------|
 | Git                     | any             | `git --version`          |
 | Docker Engine           | 25.0            | `docker version`         |
-| Docker Compose (plugin) | 2.20.2          | `docker compose version` |
+| Docker Compose (plugin) | 2.22.0          | `docker compose version` |
 
 > [!NOTE]
-> A current Docker Desktop covers both Docker requirements. The version floors come from the `start_interval` healthcheck option in `compose.yaml`, which older versions don't support.
-> You don't need a local JDK or Gradle. The app is compiled inside Docker.
+> A current Docker Desktop covers both Docker requirements. The Docker Engine floor comes from the `start_interval` healthcheck option in `compose.yaml`. The Compose floor comes from `docker compose watch` (see [Develop](#develop)).
+> You don't need a local JDK or Gradle. The app is compiled inside Docker. A JDK is only needed to [run the app outside Docker](#develop).
 
 ### 1. Configure
 
@@ -60,8 +62,8 @@ docker compose up --build --wait
 ```
 
 > [!NOTE]
-> `--wait` runs the stack in the background and returns once both containers are healthy, or fails if either one doesn't get there. The first run builds the image and initializes the database, so expect a few minutes. Flyway applies the migrations on startup.
-> If it fails with `port is already allocated`, another process is using `8080` or `5433`. Stop it, or change the host side of the mapping in `compose.yaml` (e.g. `"127.0.0.1:8081:8080"`).
+> `--wait` runs the stack in the background and returns once every container is healthy, or fails if one doesn't get there. The first run builds the image and initializes the database, so expect a few minutes. Flyway applies the migrations on startup, and ingest-service creates the `f1.laps` topic.
+> If it fails with `port is already allocated`, another process is using `8080`, `5433` or `9092`. Stop it, or change the host side of the mapping in `compose.yaml` (e.g. `"127.0.0.1:8081:8080"`).
 > If ingest-service keeps restarting, check `docker compose logs ingest-service`. `password authentication failed` means `.env` changed after the database was initialized: run `docker compose down -v` (**deletes DB data**) and start again. `UnknownHostException: postgres` means the Postgres container isn't running: run `docker compose up --wait`.
 
 ### 3. Verify
@@ -71,7 +73,7 @@ docker compose ps
 curl -s http://127.0.0.1:8080/actuator/health
 ```
 
-Both services should show `Up ... (healthy)`. In the health response, expect `"status":"UP"` at the top level and `"db":{...,"status":"UP"}` inside `components`, which confirms the app can query Postgres.
+All three services should show `Up ... (healthy)`. In the health response, expect `"status":"UP"` at the top level and `"db":{...,"status":"UP"}` inside `components`, which confirms the app can query Postgres.
 
 To confirm the migrations ran (expect `sessions` and `flyway_schema_history`):
 
@@ -83,10 +85,40 @@ docker compose exec postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -
 |------------------|------------------|----------------|
 | `ingest-service` | `127.0.0.1:8080` | `8080`         |
 | `postgres`       | `127.0.0.1:5433` | `5432`         |
+| `kafka`          | `127.0.0.1:9092` | `9092`         |
 
 > [!NOTE]
 > Postgres is published on 5433 to avoid clashing with a local Postgres on 5432. Point DB tools at `127.0.0.1:5433` with the credentials from `.env`.
-> Both ports bind to `127.0.0.1`, so only your machine can reach them. Without a host IP, Docker publishes on every network interface.
+> All ports bind to `127.0.0.1`, so only your machine can reach them. Without a host IP, Docker publishes on every network interface.
+
+### Develop
+
+The app is compiled into the ingest-service image, so a plain `docker compose up` keeps running the previous build after code changes. There are two ways to pick up changes without rebuilding by hand.
+
+**Rebuild on save with `watch`:**
+
+```bash
+docker compose watch
+```
+
+Starts the stack, then rebuilds, and restarts ingest-service whenever a file under `services/ingest-service/src`, `build.gradle.kts` or `settings.gradle.kts` changes. Postgres and Kafka keep running, and Gradle's cache keeps rebuilds to roughly the compile time. It runs in the foreground; stop watching with Ctrl-C, and use `docker compose ps` to see what's still running.
+
+**Run the app on your machine** (fastest restarts, lets you attach a debugger; requires JDK 21):
+
+```bash
+docker compose up -d --wait postgres kafka
+cd services/ingest-service
+SPRING_DATASOURCE_URL=jdbc:postgresql://127.0.0.1:5433/<POSTGRES_DB> \
+SPRING_DATASOURCE_USERNAME=<POSTGRES_USER> \
+SPRING_DATASOURCE_PASSWORD=<POSTGRES_PASSWORD> \
+./gradlew bootRun
+```
+
+Use the values from `.env`. The app reaches Kafka on `127.0.0.1:9092` by default.
+
+> [!NOTE]
+> If ingest-service is already running in Compose, stop it first with `docker compose stop ingest-service`, or `bootRun` fails because port 8080 is taken.
+> `docker compose up --build --wait` still works for a one-off rebuild.
 
 ### Stop and reset
 
@@ -96,7 +128,7 @@ docker compose exec postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -
 | `docker compose down`    | Removed       | Kept          |
 | `docker compose down -v` | Removed       | **Deleted**   |
 
-To start again after `stop` or `down`, run `docker compose up --wait`. After code changes, run `docker compose up --build --wait`. Neither touches your data.
+To start again after `stop` or `down`, run `docker compose up --wait`. After code changes, see [Develop](#develop). None of these touch your data.
 
 > [!WARNING]
 > `docker compose down -v` permanently deletes the `postgres_data` volume. The next `up` re-initializes Postgres from `.env` and Flyway runs every migration again. Use it after changing `.env` credentials or to get a clean slate.
@@ -158,7 +190,7 @@ kind delete cluster --name pit-wall
 
 ## Deploy to the local cluster
 
-Deploys ingest-service and PostgreSQL 18 into the `pit-wall` namespace, using the Kustomize manifests in `k8s/base`. Requires the kind cluster from the previous section.
+Deploys ingest-service and PostgreSQL 18 into the `pit-wall` namespace, using the Kustomize manifests in `k8s/base`. Requires the kind cluster from the previous section. Kafka isn't deployed to the cluster yet, so [session replay](#replay-a-session) only works with Docker Compose.
 
 ### 1. Build and load the image
 
@@ -171,7 +203,7 @@ kind load docker-image pit-wall/ingest-service:0.2.0 --name pit-wall
 
 > [!NOTE]
 > There's no registry, so `kind load` copies the image into each node, and the Deployment uses `imagePullPolicy: Never`.
-> Image tags follow the app version in `services/ingest-service/build.gradle.kts`, and must match `newTag` in `k8s/base/kustomization.yaml`. If the version is no longer `0.2.0`, use the current one in both commands. After code changes, bump the version, build with the new tag and update `newTag`. Reusing a tag keeps the old image running.
+> Image tags follow the app version in `services/ingest-service/build.gradle.kts`, and must match `newTag` in `k8s/base/kustomization.yaml`. If the version is no longer `0.2.0`, use the current one in both commands. After code changes, bump the version, build with the new tag, and update `newTag`. Reusing a tag keeps the old image running.
 
 ### 2. Create the database secret
 
@@ -234,11 +266,11 @@ kubectl delete -k k8s/base
 
 ---
 
-## 4. Kafka (local)
+## Kafka (local)
 
 Pit Wall uses Apache Kafka (KRaft mode, single combined broker/controller) as the event backbone between ingest and processing. It starts with the rest of the stack:
 
-    docker compose up -d
+    docker compose up -d --wait
     docker compose ps   # kafka should report "healthy"
 
 | Client location | Bootstrap address |
@@ -247,7 +279,7 @@ Pit Wall uses Apache Kafka (KRaft mode, single combined broker/controller) as th
 | Host (IDE, local tools) | `127.0.0.1:9092` |
 
 > [!NOTE]
-> Automatic topic creation is disabled. Topics must be created explicitly, as they would be in production.
+> Automatic topic creation is disabled, so topics must be declared explicitly, as they would be in production. ingest-service declares `f1.laps` (3 partitions) in `KafkaTopicConfig` and creates it on startup if it doesn't exist.
 
 ### Inspecting Kafka with the CLI
 
@@ -267,7 +299,7 @@ The Kafka CLI tools are included in the broker image, so no local install is nee
     docker compose exec kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --describe --group <group>
 
 > [!NOTE]
-> This is a single-node development setup: replication factor 1, no authentication, and combined broker/controller roles. Production Kafka runs at least three brokers with replication, TLS and authentication, separate controllers, and is typically a managed service.
+> This is a single-node development setup: replication factor 1, no authentication, and combined broker/controller roles. Production Kafka runs at least three brokers with replication, TLS, and authentication, separate controllers, and is typically a managed service.
 
 > [!WARNING]
 > The broker port is bound to `127.0.0.1` only. Do not expose it on other interfaces; the PLAINTEXT listeners have no authentication.
@@ -280,3 +312,41 @@ The Kafka CLI tools are included in the broker image, so no local install is nee
 
 > [!NOTE]
 > Kafka guarantees ordering per partition, and the key determines the partition. Keying by session and driver keeps each driver's laps in order within a session while spreading a session across partitions. Cross-driver metrics (gaps, positions) are computed downstream from stored data.
+
+---
+
+## Replay a session
+
+ingest-service fetches every lap of a session from the [OpenF1 API](https://openf1.org) and publishes each one to `f1.laps`. Requires the [Compose stack](#running-locally) to be running. Kafka isn't part of the Kubernetes deployment yet.
+
+```bash
+curl -s -X POST http://127.0.0.1:8080/api/replays/9161
+```
+
+`9161` is an OpenF1 `session_key` (2023 Singapore Grand Prix qualifying). Find others at `https://api.openf1.org/v1/sessions?year=2023`. The request returns once Kafka has confirmed or rejected every lap:
+
+```json
+{"sessionKey":9161,"totalLaps":297,"lapsPublished":297,"lapsFailed":0}
+```
+
+| Status                    | Meaning                                                                  |
+|---------------------------|--------------------------------------------------------------------------|
+| `200 OK`                  | Every lap was published                                                  |
+| `404 Not Found`           | OpenF1 has no laps for that session key                                  |
+| `503 Service Unavailable` | Some laps failed to publish (`lapsFailed` > 0). Check that Kafka is up, then retry |
+| `500 Internal Server Error` | OpenF1 returned an error or couldn't be reached                       |
+
+Laps are published in race order: lap 1 for every driver, then lap 2, and so on. Each driver's laps stay in order within their partition.
+
+To see the records, read the topic from the start:
+
+```bash
+docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 \
+  --topic f1.laps --from-beginning --property print.key=true --max-messages 5
+```
+
+> [!NOTE]
+> If Kafka is down, the request can take up to 2 minutes before returning `503`. That's the producer's `delivery.timeout.ms`, after which each send fails.
+
+> [!WARNING]
+> Replaying a session again, including retrying after a `503`, publishes every lap again. The topic will then contain duplicates.
