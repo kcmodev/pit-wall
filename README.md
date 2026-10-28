@@ -197,13 +197,13 @@ Deploys ingest-service and PostgreSQL 18 into the `pit-wall` namespace, using th
 From the repo root:
 
 ```bash
-docker build -t pit-wall/ingest-service:0.2.0 services/ingest-service
-kind load docker-image pit-wall/ingest-service:0.2.0 --name pit-wall
+docker build -t pit-wall/ingest-service:0.3.0 services/ingest-service
+kind load docker-image pit-wall/ingest-service:0.3.0 --name pit-wall
 ```
 
 > [!NOTE]
 > There's no registry, so `kind load` copies the image into each node, and the Deployment uses `imagePullPolicy: Never`.
-> Image tags follow the app version in `services/ingest-service/build.gradle.kts`, and must match `newTag` in `k8s/base/kustomization.yaml`. If the version is no longer `0.2.0`, use the current one in both commands. After code changes, bump the version, build with the new tag, and update `newTag`. Reusing a tag keeps the old image running.
+> Image tags follow the app version in `services/ingest-service/build.gradle.kts`, and must match `newTag` in `k8s/base/kustomization.yaml`. If the version is no longer `0.3.0`, use the current one in both commands. After code changes, bump the version, build with the new tag, and update `newTag`. Reusing a tag keeps the old image running.
 
 ### 2. Create the database secret
 
