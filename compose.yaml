@@ -2,6 +2,15 @@ services:
   ingest-service:
     build:
       context: services/ingest-service
+    # `docker compose watch` rebuilds and restarts the container when these change
+    develop:
+      watch:
+        - action: rebuild
+          path: services/ingest-service/src
+        - action: rebuild
+          path: services/ingest-service/build.gradle.kts
+        - action: rebuild
+          path: services/ingest-service/settings.gradle.kts
     depends_on:
       postgres:
         condition: service_healthy
