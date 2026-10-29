@@ -227,6 +227,25 @@ kubectl apply -k k8s/base
 > The first apply may warn that `namespaces/pit-wall` is missing the `last-applied-configuration` annotation, because step 2 created it. kubectl adds the annotation itself, so the warning is harmless.
 > On later runs, `statefulset.apps/postgres configured` may appear even when nothing changed (a known client-side apply quirk). `kubectl diff -k k8s/base` shows real changes; empty output means none.
 
+### 3.5 Stream processor
+
+`services/stream-processor` consumes `f1.laps` as the consumer group `stream-processor` and (for now) logs each `LapEvent`. It deserializes into its own `LapEvent` record rather than sharing ingest's class: the JSON on the topic is the contract, so the two services build and deploy independently.
+
+Run two instances to see partitions split across a group:
+
+    ./gradlew bootJar
+    java -jar build/libs/stream-processor.jar
+    java -jar build/libs/stream-processor.jar --server.port=8082
+    kx kafka-consumer-groups --describe --group stream-processor
+
+> [!NOTE]
+> Parallelism is capped by partition count: `f1.laps` has 3 partitions, so a 4th instance would sit idle. `auto.offset.reset=earliest` only applies when the group has no committed offset; a restarted instance resumes from the group's committed offsets.
+
+> [!WARNING]
+> Delivery is at-least-once and there is no dead-letter handling yet; a malformed record blocks its partition. Both are addressed in 3.6.
+
+---
+
 ### 4. Verify
 
 ```bash
