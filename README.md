@@ -246,6 +246,23 @@ Run two instances to see partitions split across a group:
 
 ---
 
+### 3.6a Lap times in Postgres
+
+The stream processor writes one row per lap to `stream_processor.lap_times`, keyed by the natural key `(session_key, driver_number, lap_number)`. Durations are stored as integer milliseconds; `timed_lap` marks laps with a time that aren't pit-out laps.
+
+Kafka delivery is at-least-once, and replaying a session publishes the same laps again, so the processor must tolerate duplicates. Writes are upserts (`INSERT ... ON CONFLICT ... DO UPDATE`): processing the same event twice leaves the same row. Replaying a session twice leaves the row count unchanged and only advances `processed_at`.
+
+    docker compose exec postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
+      -c "SELECT count(*), max(processed_at) FROM stream_processor.lap_times;"'
+
+> [!NOTE]
+> The schema is managed by Flyway (`src/main/resources/db/migration`) and applied when the processor starts. The processor owns the `stream_processor` Postgres schema, with its own Flyway history, so its migration versions can't collide with ingest-service's in `public`. Applied migrations are never edited; changes go in a new versioned file.
+
+> [!WARNING]
+> Records that keep failing are currently retried briefly, then logged and skipped. Dead-letter handling is added in 3.6b.
+
+---
+
 ### 4. Verify
 
 ```bash
