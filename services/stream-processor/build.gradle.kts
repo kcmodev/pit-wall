@@ -30,7 +30,7 @@ dependencies {
 //    testImplementation("org.springframework.boot:spring-boot-starter-flyway-test")
 //    testImplementation("org.springframework.boot:spring-boot-starter-jdbc-test")
 
-//    runtimeOnly("org.postgresql:postgresql")
+    runtimeOnly("org.postgresql:postgresql")
 
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
