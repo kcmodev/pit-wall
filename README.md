@@ -243,7 +243,7 @@ Run two instances to see partitions split across a group:
 > Parallelism is capped by partition count: `f1.laps` has 3 partitions, so a 4th instance would sit idle. `auto.offset.reset=earliest` only applies when the group has no committed offset; a restarted instance resumes from the group's committed offsets.
 
 > [!WARNING]
-> Delivery is at-least-once and there is no dead-letter handling yet; a malformed record blocks its partition. Both are addressed in 3.6.
+> At this stage, delivery is at-least-once and there is no dead-letter handling; a malformed record blocks its partition. Duplicates are handled in 3.6a and bad records in 3.6b.
 
 ---
 
@@ -260,7 +260,33 @@ Kafka delivery is at-least-once, and replaying a session publishes the same laps
 > The schema is managed by Flyway (`src/main/resources/db/migration`) and applied when the processor starts. The processor owns the `stream_processor` Postgres schema, with its own Flyway history, so its migration versions can't collide with ingest-service's in `public`. Applied migrations are never edited; changes go in a new versioned file.
 
 > [!WARNING]
-> Records that keep failing are currently retried briefly, then logged and skipped. Dead-letter handling is added in 3.6b.
+> At this stage, records that keep failing are retried briefly, then logged and skipped. Dead-letter handling is added in 3.6b.
+
+---
+
+### 3.6b Error handling and dead-letter topic
+
+Failures are handled by type:
+
+| Failure | Example | Handling |
+|---|---|---|
+| Bad data | malformed JSON, missing required field, negative ID, empty value | Published to `f1.laps.DLT` immediately; the partition moves on |
+| Infrastructure | Postgres unavailable, deadlock, dropped connection | Retried with exponential backoff (1s → 30s cap) with no attempt limit, until it succeeds; lag grows meanwhile |
+| Unexpected | a bug in the processor | Published to `f1.laps.DLT` immediately |
+
+Only failures known to be transient are retried (Spring's `DataAccessResourceFailureException`, `TransientDataAccessException` and `RecoverableDataAccessException`); everything else is dead-lettered. Retrying an unknown error forever could block a partition on a record that will never succeed.
+
+Required fields (`sessionKey`, `driverNumber`, `lapNumber`, `pitOutLap`) are boxed types in `LapEvent`, so a missing key arrives as `null` and fails validation instead of silently becoming `0` or `false`.
+
+The dead-letter topic is for bad data, not outages: dead-lettering during an outage would fill it with valid laps that need manual replay. Each dead-lettered record keeps its original key and partition and carries headers describing the failure (`kafka_dlt-exception-message`, `kafka_dlt-original-offset`, ...).
+
+    kx kafka-console-consumer --topic f1.laps.DLT --from-beginning --formatter-property print.headers=true
+
+> [!NOTE]
+> Retries are blocking: while a record retries, the rest of its partition waits. This preserves per-driver lap order. Non-blocking retry topics would keep the partition moving but give up that ordering.
+
+> [!WARNING]
+> Nothing consumes the dead-letter topic yet. In production it would be monitored and alerted on, with tooling to inspect and replay fixed records.
 
 ---
 
@@ -319,11 +345,16 @@ Pit Wall uses Apache Kafka (KRaft mode, single combined broker/controller) as th
 | Host (IDE, local tools) | `127.0.0.1:9092` |
 
 > [!NOTE]
-> Automatic topic creation is disabled, so topics must be declared explicitly, as they would be in production. ingest-service declares `f1.laps` (3 partitions) in `KafkaTopicConfig` and creates it on startup if it doesn't exist.
+> Automatic topic creation is disabled, so topics must be declared explicitly, as they would be in production. Each service declares the topics it produces and creates them on startup if they don't exist: ingest-service declares `f1.laps` (3 partitions) in `KafkaTopicConfig`, and stream-processor declares `f1.laps.DLT` (3 partitions) in `KafkaErrorHandlingConfig`.
 
 ### Inspecting Kafka with the CLI
 
-The Kafka CLI tools are included in the broker image, so no local install is needed:
+The Kafka CLI tools are included in the broker image, so no local install is needed. The examples elsewhere in this README use a `kx` shell function that runs a tool in the container with the bootstrap server filled in; add it to `~/.zshrc` or `~/.bashrc`:
+
+    # kx <tool> [args...], e.g. kx kafka-topics --list
+    kx() { docker compose exec kafka /opt/kafka/bin/"$1".sh --bootstrap-server localhost:9092 "${@:2}"; }
+
+`docker compose` finds `compose.yaml` from the current directory, so run `kx` from the repo root (or add `--project-directory <path-to-repo>`). The full commands without `kx`:
 
     # list topics
     docker compose exec kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list
@@ -349,6 +380,7 @@ The Kafka CLI tools are included in the broker image, so no local install is nee
 | Topic | Key | Value | Producer | Purpose |
 |---|---|---|---|---|
 | `f1.laps` | `<sessionKey>-<driverNumber>` | `LapEvent` (JSON) | ingest-service | One record per lap |
+| `f1.laps.DLT` | Original record's key | Original bytes, or `LapEvent` (JSON) if it deserialized | stream-processor | Records that failed processing, with `kafka_dlt-*` failure headers; same partition number as the original |
 
 > [!NOTE]
 > Kafka guarantees ordering per partition, and the key determines the partition. Keying by session and driver keeps each driver's laps in order within a session while spreading a session across partitions. Cross-driver metrics (gaps, positions) are computed downstream from stored data.

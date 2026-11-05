@@ -29,14 +29,20 @@ public class LapTimeService {
             throw new InvalidLapEventException("Lap event is null");
 
         List<String> errors = new ArrayList<>();
-        if (event.sessionKey() < 0)
-            errors.add("sessionKey=" + event.sessionKey());
-        if (event.driverNumber() < 0)
-            errors.add("driverNumber=" + event.driverNumber());
-        if (event.lapNumber() < 0)
-            errors.add("lapNumber=" + event.lapNumber());
+        checkNonNegative(errors, "sessionKey", event.sessionKey());
+        checkNonNegative(errors, "driverNumber", event.driverNumber());
+        checkNonNegative(errors, "lapNumber", event.lapNumber());
+        if (event.pitOutLap() == null)
+            errors.add("pitOutLap is missing");
 
         if (!errors.isEmpty())
-            throw new InvalidLapEventException("Negative field(s): " + String.join(", ", errors));
+            throw new InvalidLapEventException("Invalid lap event: " + String.join(", ", errors));
+    }
+
+    private static void checkNonNegative(List<String> errors, String field, Integer value) {
+        if (value == null)
+            errors.add(field + " is missing");
+        else if (value < 0)
+            errors.add(field + " is negative (" + value + ")");
     }
 }
