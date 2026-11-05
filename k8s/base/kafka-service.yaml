@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: kafka
+  namespace: pit-wall
+spec:
+  clusterIP: None                  # "headless": DNS points straight at the pod
+  publishNotReadyAddresses: true   # the broker's own address must resolve while it is still starting
+  selector:
+    app.kubernetes.io/name: kafka
+  ports:
+    - name: kafka
+      port: 9092

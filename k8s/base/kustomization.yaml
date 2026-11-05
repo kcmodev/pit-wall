@@ -5,7 +5,12 @@ resources:
   - namespace.yaml
   - postgres-service.yaml
   - postgres-statefulset.yaml
+  - kafka-service.yaml
+  - kafka-statefulset.yaml
   - ingest-service-deployment.yaml
+  - stream-processor-deployment.yaml
 images:
   - name: pit-wall/ingest-service
+    newTag: "0.3.0"
+  - name: pit-wall/stream-processor
     newTag: "0.3.0"

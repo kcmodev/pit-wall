@@ -26,6 +26,32 @@ services:
       SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       MANAGEMENT_ENDPOINT_HEALTH_SHOW_DETAILS: always
 
+  stream-processor:
+    build:
+      context: services/stream-processor
+    develop:
+      watch:
+        - action: rebuild
+          path: services/stream-processor/src
+        - action: rebuild
+          path: services/stream-processor/build.gradle.kts
+        - action: rebuild
+          path: services/stream-processor/settings.gradle.kts
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8081:8081"
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:?set it in .env}?currentSchema=stream_processor
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:?set it in .env}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:?set it in .env}
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      MANAGEMENT_ENDPOINT_HEALTH_SHOW_DETAILS: always
+
   postgres:
     image: postgres:18@sha256:edb0c08dc33befd0262ab3b5cf1c4f3f8cfd8b09e88c05b45adee29d6761ddb6
     healthcheck:

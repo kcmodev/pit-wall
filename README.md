@@ -4,9 +4,9 @@
 
 ## Status
 
-- [x] **Docker:** ingest-service containerized, running with PostgreSQL via Docker Compose
+- [x] **Docker:** ingest-service and stream-processor containerized, running with PostgreSQL and Kafka via Docker Compose
 - [x] **Kubernetes:** running on a local kind cluster, deployed with Kustomize
-- [x] **Kafka:** ingest-service replays OpenF1 lap data into Kafka on request (Docker Compose only for now)
+- [x] **Kafka:** ingest-service replays OpenF1 lap data into Kafka on request; stream-processor consumes it
 - [ ] Stream processing, REST API, Grafana dashboards, CI/CD with GitHub Actions
 
 ## Contents
@@ -190,20 +190,21 @@ kind delete cluster --name pit-wall
 
 ## Deploy to the local cluster
 
-Deploys ingest-service and PostgreSQL 18 into the `pit-wall` namespace, using the Kustomize manifests in `k8s/base`. Requires the kind cluster from the previous section. Kafka isn't deployed to the cluster yet, so [session replay](#replay-a-session) only works with Docker Compose.
+Deploys ingest-service, stream-processor, PostgreSQL 18 and Kafka into the `pit-wall` namespace, using the Kustomize manifests in `k8s/base`. Requires the kind cluster from the previous section. Inside the cluster, both services reach Kafka at `kafka:9092`.
 
-### 1. Build and load the image
+### 1. Build and load the images
 
 From the repo root:
 
 ```bash
 docker build -t pit-wall/ingest-service:0.3.0 services/ingest-service
-kind load docker-image pit-wall/ingest-service:0.3.0 --name pit-wall
+docker build -t pit-wall/stream-processor:0.3.0 services/stream-processor
+kind load docker-image pit-wall/ingest-service:0.3.0 pit-wall/stream-processor:0.3.0 --name pit-wall
 ```
 
 > [!NOTE]
 > There's no registry, so `kind load` copies the image into each node, and the Deployment uses `imagePullPolicy: Never`.
-> Image tags follow the app version in `services/ingest-service/build.gradle.kts`, and must match `newTag` in `k8s/base/kustomization.yaml`. If the version is no longer `0.3.0`, use the current one in both commands. After code changes, bump the version, build with the new tag, and update `newTag`. Reusing a tag keeps the old image running.
+> Image tags follow each app's version in its `build.gradle.kts`, and must match its `newTag` in `k8s/base/kustomization.yaml`. If the version is no longer `0.3.0`, use the current one in both commands. After code changes, bump the version, build with the new tag, and update `newTag`. Reusing a tag keeps the old image running.
 
 ### 2. Create the database secret
 
@@ -267,11 +268,13 @@ Kafka delivery is at-least-once, and replaying a session publishes the same laps
 
 ```bash
 kubectl rollout status -n pit-wall statefulset/postgres --timeout=180s
+kubectl rollout status -n pit-wall statefulset/kafka --timeout=180s
 kubectl rollout status -n pit-wall deployment/ingest-service --timeout=180s
+kubectl rollout status -n pit-wall deployment/stream-processor --timeout=180s
 kubectl get pods -n pit-wall
 ```
 
-Both pods should show `1/1` under `READY`. Then check the health endpoint:
+All four pods should show `1/1` under `READY`. Then check the health endpoint:
 
 ```bash
 kubectl port-forward -n pit-wall deployment/ingest-service 8080:8080
@@ -288,6 +291,7 @@ kubectl exec -n pit-wall postgres-0 -- sh -c 'psql -U "$POSTGRES_USER" -d "$POST
 ```
 
 > [!NOTE]
+> stream-processor's `f1.laps` topic is created by ingest-service on startup; until then the processor logs `UNKNOWN_TOPIC_OR_PARTITION` warnings and picks the topic up once it exists.
 > ingest-service may restart or show `0/1` until Postgres is ready. Flyway needs the database at startup, and the database is part of its readiness check.
 > If `port-forward` fails with "address already in use", stop whatever else is on port 8080 (e.g. `docker compose down`).
 
@@ -353,7 +357,7 @@ The Kafka CLI tools are included in the broker image, so no local install is nee
 
 ## Replay a session
 
-ingest-service fetches every lap of a session from the [OpenF1 API](https://openf1.org) and publishes each one to `f1.laps`. Requires the [Compose stack](#running-locally) to be running. Kafka isn't part of the Kubernetes deployment yet.
+ingest-service fetches every lap of a session from the [OpenF1 API](https://openf1.org) and publishes each one to `f1.laps`. Requires the [Compose stack](#running-locally) to be running. On kind, `kubectl port-forward -n pit-wall deployment/ingest-service 8080:8080` first; the commands below that use `docker compose exec` are Compose-only.
 
 ```bash
 curl -s -X POST http://127.0.0.1:8080/api/replays/9161
