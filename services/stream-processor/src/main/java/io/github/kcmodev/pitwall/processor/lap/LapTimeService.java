@@ -17,20 +17,16 @@ public class LapTimeService {
     }
 
     public void process(LapEvent event) {
-        try {
-            verifyEvent(event);
-            LapTime lap = LapTime.from(event);
-            lapTimeRepository.upsert(lap);
-            LOGGER.debug("Upserted lap time session={} driver={} lap={}",
-                    lap.sessionKey(), lap.driverNumber(), lap.lapNumber());
-        } catch (InvalidLapExceptionEvent e) {
-            LOGGER.warn("Dropping invalid lap event: {} ({})", event, e.getMessage());
-        }
+        verifyEvent(event);
+        LapTime lap = LapTime.from(event);
+        lapTimeRepository.upsert(lap);
+        LOGGER.debug("Upserted lap time session={} driver={} lap={}",
+                lap.sessionKey(), lap.driverNumber(), lap.lapNumber());
     }
 
     private static void verifyEvent(LapEvent event) {
         if (event == null)
-            throw new InvalidLapExceptionEvent("Lap event is null");
+            throw new InvalidLapEventException("Lap event is null");
 
         List<String> errors = new ArrayList<>();
         if (event.sessionKey() < 0)
@@ -41,6 +37,6 @@ public class LapTimeService {
             errors.add("lapNumber=" + event.lapNumber());
 
         if (!errors.isEmpty())
-            throw new InvalidLapExceptionEvent("Negative field(s): " + String.join(", ", errors));
+            throw new InvalidLapEventException("Negative field(s): " + String.join(", ", errors));
     }
 }
