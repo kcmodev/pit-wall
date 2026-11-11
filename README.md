@@ -313,6 +313,35 @@ For an outage, stop Postgres, replay a session, then start it again:
 
 ---
 
+### 3.6c Reprocessing from the log
+
+Kafka keeps records after they're consumed, so changing how the processor computes something doesn't require re-ingesting from OpenF1: rewind the consumer group's offsets and the processor reads the topic again with the new code. The upserts from 3.6a make this safe; reprocessed laps update their rows instead of adding new ones.
+
+The example is `representative_lap`, a column added after laps were already stored: true for timed laps other than lap 1, which starts from the grid. Migration `V2__add_representative_lap.sql` adds it as nullable, so existing rows show `NULL` ("not computed yet") until they're reprocessed. The upsert sets it on conflict as well as on insert, which is what lets a replay fill it for existing rows.
+
+Offsets can only be reset while the group has no active members, so stop the processor first:
+
+    docker compose stop stream-processor
+    kx kafka-consumer-groups --group stream-processor --topic f1.laps --reset-offsets --to-earliest --dry-run
+    kx kafka-consumer-groups --group stream-processor --topic f1.laps --reset-offsets --to-earliest --execute
+    docker compose start stream-processor
+    kx kafka-consumer-groups --describe --group stream-processor   # LAG jumps to the topic size, then drains to 0
+
+Afterwards every row has a value and the row count is unchanged:
+
+    docker compose exec postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -P null="(null)" \
+      -c "SELECT representative_lap, count(*) FROM stream_processor.lap_times GROUP BY 1;"'
+
+For session 9888 that's 1,025 representative laps and 42 that aren't, with no `(null)` row.
+
+> [!NOTE]
+> Only records still in the log can be replayed: in production that's bounded by the topic's retention, and locally by Kafka having no volume (`docker compose down` empties it). Reprocessing also replays failures: bad records still in `f1.laps` are dead-lettered again. The dead-letter topic itself isn't reread, because the processor only consumes `f1.laps`.
+
+> [!NOTE]
+> Always run `--dry-run` first. Resetting offsets changes shared state for every instance in the group, and `--to-offset` or `--to-datetime` can rewind to a specific point instead of the beginning.
+
+---
+
 ### 4. Verify
 
 ```bash
