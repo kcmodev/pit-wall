@@ -282,6 +282,29 @@ The dead-letter topic is for bad data, not outages: dead-lettering during an out
 
     kx kafka-console-consumer --topic f1.laps.DLT --from-beginning --formatter-property print.headers=true
 
+To see each path, keep the consumer above running and send records with `kx kafka-console-producer --topic f1.laps`:
+
+| Path | Send | Result |
+|---|---|---|
+| Poison pill | `{this is not json` | Appears in the DLT as the original bytes; `kafka_dlt-exception-fqcn` is `DeserializationException` |
+| Invalid event | `{}` or `{"sessionKey":9888,"driverNumber":-1,"lapNumber":1,"pitOutLap":false}` | Appears in the DLT re-serialized as a `LapEvent`, with `InvalidLapEventException` as the cause |
+
+In both cases lag returns to 0 and the `lap_times` count is unchanged.
+
+For an outage, stop Postgres, replay a session, then start it again:
+
+    docker compose stop postgres
+    curl -s localhost:8081/actuator/health/readiness   # DOWN (HTTP 503)
+    curl -X POST localhost:8080/api/replays/9888       # ingest doesn't need Postgres; all laps publish
+    kx kafka-consumer-groups --describe --group stream-processor   # LAG rises and holds
+    kx kafka-get-offsets --topic f1.laps.DLT           # unchanged: nothing dead-lettered
+    docker compose start postgres                      # within ~30s (the next retry), LAG drains to 0
+
+`docker compose logs stream-processor` shows `CannotGetJdbcConnectionException` at growing intervals while Postgres is down. Afterwards the `lap_times` count is unchanged and `max(processed_at)` is recent: every lap was reprocessed, and the upserts absorbed the duplicates.
+
+> [!NOTE]
+> `kafka-get-offsets` prints `partition:offset` pairs, where the offset is each partition's log-end offset (the offset the next record will get). With nothing deleted by retention, that equals the partition's record count.
+
 > [!NOTE]
 > Retries are blocking: while a record retries, the rest of its partition waits. This preserves per-driver lap order. Non-blocking retry topics would keep the partition moving but give up that ordering.
 
