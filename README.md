@@ -6,7 +6,7 @@
 
 - [x] **Docker:** ingest-service and stream-processor containerized, running with PostgreSQL and Kafka via Docker Compose
 - [x] **Kubernetes:** running on a local kind cluster, deployed with Kustomize
-- [x] **Kafka:** ingest-service replays OpenF1 lap data into Kafka on request; stream-processor consumes it
+- [x] **Kafka:** ingest-service replays OpenF1 lap data into Kafka on request; stream-processor stores lap times in Postgres, dead-letters bad records, and can reprocess the topic
 - [ ] Stream processing, REST API, Grafana dashboards, CI/CD with GitHub Actions
 
 ## Contents
@@ -22,7 +22,7 @@
 
 ## Running locally
 
-Runs ingest-service (Spring Boot), PostgreSQL 18, and Kafka with Docker Compose. A healthy stack means the app is up, connected to Postgres, and has applied its database migrations. To pull F1 data into Kafka, [replay a session](#replay-a-session).
+Runs ingest-service and stream-processor (Spring Boot), PostgreSQL 18, and Kafka with Docker Compose. A healthy stack means both apps are up, connected to Postgres, and have applied their database migrations. To pull F1 data into Kafka, [replay a session](#replay-a-session).
 
 ### Prerequisites
 
@@ -63,9 +63,17 @@ docker compose up --build --wait
 ```
 
 > [!NOTE]
-> `--wait` runs the stack in the background and returns once every container is healthy, or fails if one doesn't get there. The first run builds the image and initializes the database, so expect a few minutes. Flyway applies the migrations on startup, and ingest-service creates the `f1.laps` topic.
-> If it fails with `port is already allocated`, another process is using `8080`, `5433` or `9092`. Stop it, or change the host side of the mapping in `compose.yaml` (e.g. `"127.0.0.1:8081:8080"`).
-> If ingest-service keeps restarting, check `docker compose logs ingest-service`. `password authentication failed` means `.env` changed after the database was initialized: run `docker compose down -v` (**deletes DB data**) and start again. `UnknownHostException: postgres` means the Postgres container isn't running: run `docker compose up --wait`.
+> `--wait` runs the stack in the background and returns once every container is healthy, or fails if one doesn't get there. The first run builds the image and initializes the database, so expect a few minutes. Flyway applies each app's migrations on startup; ingest-service creates the `f1.laps` topic and stream-processor creates `f1.laps.DLT`.
+> If it fails with `port is already allocated`, another process is using `8080`, `8081`, `5433` or `9092`. Stop it, or change the host side of the mapping in `compose.yaml` (e.g. `"127.0.0.1:8090:8080"`).
+> If an app keeps restarting, check `docker compose logs ingest-service` (or `stream-processor`). `password authentication failed` means the database was initialized with a different password than `.env` now has (`.env` changed, or `POSTGRES_PASSWORD` is exported in your shell, which takes precedence over `.env`). Either set the database's password to the `.env` value, keeping the data:
+>
+> ```bash
+> docker compose exec -T postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v u="$POSTGRES_USER" -v pw="$POSTGRES_PASSWORD" <<"SQL"
+> ALTER USER :"u" PASSWORD :'\''pw'\'';
+> SQL'
+> ```
+>
+> or run `docker compose down -v` (**deletes DB data**) and start again. `UnknownHostException: postgres` means the Postgres container isn't running: run `docker compose up --wait`.
 
 ### 3. Verify
 
@@ -74,19 +82,22 @@ docker compose ps
 curl -s http://127.0.0.1:8080/actuator/health
 ```
 
-All three services should show `Up ... (healthy)`. In the health response, expect `"status":"UP"` at the top level and `"db":{...,"status":"UP"}` inside `components`, which confirms the app can query Postgres.
+All four services should show `Up ... (healthy)`. In ingest-service's health response, expect `"status":"UP"` at the top level and `"db":{...,"status":"UP"}` inside `components`, which confirms the app can query Postgres.
 
-To confirm the migrations ran (expect `sessions` and `flyway_schema_history`):
+To confirm the migrations ran (expect `sessions` and `flyway_schema_history` in `public`, and `lap_times` and `flyway_schema_history` in `stream_processor`):
 
 ```bash
-docker compose exec postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "\dt"'
+docker compose exec postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "\dt" -c "\dt stream_processor.*"'
 ```
 
-| Service          | Host address     | Container port |
-|------------------|------------------|----------------|
-| `ingest-service` | `127.0.0.1:8080` | `8080`         |
-| `postgres`       | `127.0.0.1:5433` | `5432`         |
-| `kafka`          | `127.0.0.1:9092` | `9092`         |
+stream-processor has its own health endpoint at `http://127.0.0.1:8081/actuator/health`.
+
+| Service            | Host address     | Container port |
+|--------------------|------------------|----------------|
+| `ingest-service`   | `127.0.0.1:8080` | `8080`         |
+| `stream-processor` | `127.0.0.1:8081` | `8081`         |
+| `postgres`         | `127.0.0.1:5433` | `5432`         |
+| `kafka`            | `127.0.0.1:9092` | `9092`         |
 
 > [!NOTE]
 > Postgres is published on 5433 to avoid clashing with a local Postgres on 5432. Point DB tools at `127.0.0.1:5433` with the credentials from `.env`.
@@ -94,7 +105,7 @@ docker compose exec postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -
 
 ### Develop
 
-The app is compiled into the ingest-service image, so a plain `docker compose up` keeps running the previous build after code changes. There are two ways to pick up changes without rebuilding by hand.
+Each app is compiled into its image, so a plain `docker compose up` keeps running the previous build after code changes. There are two ways to pick up changes without rebuilding by hand.
 
 **Rebuild on save with `watch`:**
 
@@ -102,7 +113,7 @@ The app is compiled into the ingest-service image, so a plain `docker compose up
 docker compose watch
 ```
 
-Starts the stack, then rebuilds, and restarts ingest-service whenever a file under `services/ingest-service/src`, `build.gradle.kts` or `settings.gradle.kts` changes. Postgres and Kafka keep running, and Gradle's cache keeps rebuilds to roughly the compile time. It runs in the foreground; stop watching with Ctrl-C, and use `docker compose ps` to see what's still running.
+Starts the stack, then rebuilds and restarts a service whenever a file under its `src`, `build.gradle.kts` or `settings.gradle.kts` changes (both ingest-service and stream-processor). Postgres and Kafka keep running, and Gradle's cache keeps rebuilds to roughly the compile time. It runs in the foreground; stop watching with Ctrl-C, and use `docker compose ps` to see what's still running.
 
 **Run the app on your machine** (fastest restarts, lets you attach a debugger; requires JDK 21):
 
@@ -249,10 +260,10 @@ curl -s http://127.0.0.1:8080/actuator/health
 
 In the health response, expect `"status":"UP"` at the top level and `"db":{...,"status":"UP"}` inside `components`, which confirms the app can query Postgres. Stop `port-forward` with Ctrl-C.
 
-To confirm the migrations ran (expect `sessions` and `flyway_schema_history`):
+To confirm the migrations ran (expect `sessions` and `flyway_schema_history` in `public`, and `lap_times` and `flyway_schema_history` in `stream_processor`):
 
 ```bash
-kubectl exec -n pit-wall postgres-0 -- sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "\dt"'
+kubectl exec -n pit-wall postgres-0 -- sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "\dt" -c "\dt stream_processor.*"'
 ```
 
 > [!NOTE]
@@ -353,14 +364,14 @@ To see the records, read the topic from the start:
 
 ```bash
 docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 \
-  --topic f1.laps --from-beginning --property print.key=true --max-messages 5
+  --topic f1.laps --from-beginning --formatter-property print.key=true --max-messages 5
 ```
 
 > [!NOTE]
 > If Kafka is down, the request can take up to 2 minutes before returning `503`. That's the producer's `delivery.timeout.ms`, after which each send fails.
 
 > [!WARNING]
-> Replaying a session again, including retrying after a `503`, publishes every lap again. The topic will then contain duplicates.
+> Replaying a session again, including retrying after a `503`, publishes every lap again. The topic will then contain duplicates; stream-processor's upserts absorb them (see [Lap times in Postgres](#lap-times-in-postgres)).
 
 ---
 
@@ -370,20 +381,21 @@ stream-processor consumes `f1.laps`, stores lap times in Postgres, dead-letters 
 
 ### Consumer group
 
-`services/stream-processor` consumes `f1.laps` as the consumer group `stream-processor` and (for now) logs each `LapEvent`. It deserializes into its own `LapEvent` record rather than sharing ingest's class: the JSON on the topic is the contract, so the two services build and deploy independently.
+`services/stream-processor` consumes `f1.laps` as the consumer group `stream-processor`. It deserializes into its own `LapEvent` record rather than sharing ingest's class: the JSON on the topic is the contract, so the two services build and deploy independently.
 
-Run two instances to see partitions split across a group:
+To see partitions split across a group, run two more instances on your machine next to the one in Compose (requires JDK 21). Use the values from `.env`:
 
+    cd services/stream-processor
     ./gradlew bootJar
-    java -jar build/libs/stream-processor.jar
-    java -jar build/libs/stream-processor.jar --server.port=8082
-    kx kafka-consumer-groups --describe --group stream-processor
+    POSTGRES_DB=<POSTGRES_DB> POSTGRES_USER=<POSTGRES_USER> POSTGRES_PASSWORD=<POSTGRES_PASSWORD> \
+      java -jar build/libs/stream-processor.jar --server.port=8082
+    # in another terminal, the same command with --server.port=8083
+    kx kafka-consumer-groups --describe --group stream-processor   # from the repo root: one partition per instance
+
+On your machine the app reaches Postgres on `127.0.0.1:5433` and Kafka on `127.0.0.1:9092` by default.
 
 > [!NOTE]
 > Parallelism is capped by partition count: `f1.laps` has 3 partitions, so a 4th instance would sit idle. `auto.offset.reset=earliest` only applies when the group has no committed offset; a restarted instance resumes from the group's committed offsets.
-
-> [!WARNING]
-> At this stage, delivery is at-least-once and there is no dead-letter handling; a malformed record blocks its partition. Duplicates are handled in [Lap times in Postgres](#lap-times-in-postgres) and bad records in [Error handling](#error-handling-and-dead-letter-topic).
 
 ### Lap times in Postgres
 
@@ -396,9 +408,6 @@ Kafka delivery is at-least-once, and replaying a session publishes the same laps
 
 > [!NOTE]
 > The schema is managed by Flyway (`src/main/resources/db/migration`) and applied when the processor starts. The processor owns the `stream_processor` Postgres schema, with its own Flyway history, so its migration versions can't collide with ingest-service's in `public`. Applied migrations are never edited; changes go in a new versioned file.
-
-> [!WARNING]
-> At this stage, records that keep failing are retried briefly, then logged and skipped. Dead-letter handling is added in [Error handling](#error-handling-and-dead-letter-topic).
 
 ### Error handling and dead-letter topic
 
