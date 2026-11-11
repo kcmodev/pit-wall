@@ -16,6 +16,7 @@
 - [Deploy to the local cluster](#deploy-to-the-local-cluster)
 - [Kafka (local)](#kafka-local)
 - [Replay a session](#replay-a-session)
+- [Stream processor](#stream-processor)
 
 ---
 
@@ -228,120 +229,6 @@ kubectl apply -k k8s/base
 > The first apply may warn that `namespaces/pit-wall` is missing the `last-applied-configuration` annotation, because step 2 created it. kubectl adds the annotation itself, so the warning is harmless.
 > On later runs, `statefulset.apps/postgres configured` may appear even when nothing changed (a known client-side apply quirk). `kubectl diff -k k8s/base` shows real changes; empty output means none.
 
-### 3.5 Stream processor
-
-`services/stream-processor` consumes `f1.laps` as the consumer group `stream-processor` and (for now) logs each `LapEvent`. It deserializes into its own `LapEvent` record rather than sharing ingest's class: the JSON on the topic is the contract, so the two services build and deploy independently.
-
-Run two instances to see partitions split across a group:
-
-    ./gradlew bootJar
-    java -jar build/libs/stream-processor.jar
-    java -jar build/libs/stream-processor.jar --server.port=8082
-    kx kafka-consumer-groups --describe --group stream-processor
-
-> [!NOTE]
-> Parallelism is capped by partition count: `f1.laps` has 3 partitions, so a 4th instance would sit idle. `auto.offset.reset=earliest` only applies when the group has no committed offset; a restarted instance resumes from the group's committed offsets.
-
-> [!WARNING]
-> At this stage, delivery is at-least-once and there is no dead-letter handling; a malformed record blocks its partition. Duplicates are handled in 3.6a and bad records in 3.6b.
-
----
-
-### 3.6a Lap times in Postgres
-
-The stream processor writes one row per lap to `stream_processor.lap_times`, keyed by the natural key `(session_key, driver_number, lap_number)`. Durations are stored as integer milliseconds; `timed_lap` marks laps with a time that aren't pit-out laps.
-
-Kafka delivery is at-least-once, and replaying a session publishes the same laps again, so the processor must tolerate duplicates. Writes are upserts (`INSERT ... ON CONFLICT ... DO UPDATE`): processing the same event twice leaves the same row. Replaying a session twice leaves the row count unchanged and only advances `processed_at`.
-
-    docker compose exec postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
-      -c "SELECT count(*), max(processed_at) FROM stream_processor.lap_times;"'
-
-> [!NOTE]
-> The schema is managed by Flyway (`src/main/resources/db/migration`) and applied when the processor starts. The processor owns the `stream_processor` Postgres schema, with its own Flyway history, so its migration versions can't collide with ingest-service's in `public`. Applied migrations are never edited; changes go in a new versioned file.
-
-> [!WARNING]
-> At this stage, records that keep failing are retried briefly, then logged and skipped. Dead-letter handling is added in 3.6b.
-
----
-
-### 3.6b Error handling and dead-letter topic
-
-Failures are handled by type:
-
-| Failure | Example | Handling |
-|---|---|---|
-| Bad data | malformed JSON, missing required field, negative ID, empty value | Published to `f1.laps.DLT` immediately; the partition moves on |
-| Infrastructure | Postgres unavailable, deadlock, dropped connection | Retried with exponential backoff (1s → 30s cap) with no attempt limit, until it succeeds; lag grows meanwhile |
-| Unexpected | a bug in the processor | Published to `f1.laps.DLT` immediately |
-
-Only failures known to be transient are retried (Spring's `DataAccessResourceFailureException`, `TransientDataAccessException` and `RecoverableDataAccessException`); everything else is dead-lettered. Retrying an unknown error forever could block a partition on a record that will never succeed.
-
-Required fields (`sessionKey`, `driverNumber`, `lapNumber`, `pitOutLap`) are boxed types in `LapEvent`, so a missing key arrives as `null` and fails validation instead of silently becoming `0` or `false`.
-
-The dead-letter topic is for bad data, not outages: dead-lettering during an outage would fill it with valid laps that need manual replay. Each dead-lettered record keeps its original key and partition and carries headers describing the failure (`kafka_dlt-exception-message`, `kafka_dlt-original-offset`, ...).
-
-    kx kafka-console-consumer --topic f1.laps.DLT --from-beginning --formatter-property print.headers=true
-
-To see each path, keep the consumer above running and send records with `kx kafka-console-producer --topic f1.laps`:
-
-| Path | Send | Result |
-|---|---|---|
-| Poison pill | `{this is not json` | Appears in the DLT as the original bytes; `kafka_dlt-exception-fqcn` is `DeserializationException` |
-| Invalid event | `{}` or `{"sessionKey":9888,"driverNumber":-1,"lapNumber":1,"pitOutLap":false}` | Appears in the DLT re-serialized as a `LapEvent`, with `InvalidLapEventException` as the cause |
-
-In both cases lag returns to 0 and the `lap_times` count is unchanged.
-
-For an outage, stop Postgres, replay a session, then start it again:
-
-    docker compose stop postgres
-    curl -s localhost:8081/actuator/health/readiness   # DOWN (HTTP 503)
-    curl -X POST localhost:8080/api/replays/9888       # ingest doesn't need Postgres; all laps publish
-    kx kafka-consumer-groups --describe --group stream-processor   # LAG rises and holds
-    kx kafka-get-offsets --topic f1.laps.DLT           # unchanged: nothing dead-lettered
-    docker compose start postgres                      # within ~30s (the next retry), LAG drains to 0
-
-`docker compose logs stream-processor` shows `CannotGetJdbcConnectionException` at growing intervals while Postgres is down. Afterwards the `lap_times` count is unchanged and `max(processed_at)` is recent: every lap was reprocessed, and the upserts absorbed the duplicates.
-
-> [!NOTE]
-> `kafka-get-offsets` prints `partition:offset` pairs, where the offset is each partition's log-end offset (the offset the next record will get). With nothing deleted by retention, that equals the partition's record count.
-
-> [!NOTE]
-> Retries are blocking: while a record retries, the rest of its partition waits. This preserves per-driver lap order. Non-blocking retry topics would keep the partition moving but give up that ordering.
-
-> [!WARNING]
-> Nothing consumes the dead-letter topic yet. In production it would be monitored and alerted on, with tooling to inspect and replay fixed records.
-
----
-
-### 3.6c Reprocessing from the log
-
-Kafka keeps records after they're consumed, so changing how the processor computes something doesn't require re-ingesting from OpenF1: rewind the consumer group's offsets and the processor reads the topic again with the new code. The upserts from 3.6a make this safe; reprocessed laps update their rows instead of adding new ones.
-
-The example is `representative_lap`, a column added after laps were already stored: true for timed laps other than lap 1, which starts from the grid. Migration `V2__add_representative_lap.sql` adds it as nullable, so existing rows show `NULL` ("not computed yet") until they're reprocessed. The upsert sets it on conflict as well as on insert, which is what lets a replay fill it for existing rows.
-
-Offsets can only be reset while the group has no active members, so stop the processor first:
-
-    docker compose stop stream-processor
-    kx kafka-consumer-groups --group stream-processor --topic f1.laps --reset-offsets --to-earliest --dry-run
-    kx kafka-consumer-groups --group stream-processor --topic f1.laps --reset-offsets --to-earliest --execute
-    docker compose start stream-processor
-    kx kafka-consumer-groups --describe --group stream-processor   # LAG jumps to the topic size, then drains to 0
-
-Afterwards every row has a value and the row count is unchanged:
-
-    docker compose exec postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -P null="(null)" \
-      -c "SELECT representative_lap, count(*) FROM stream_processor.lap_times GROUP BY 1;"'
-
-For session 9888 that's 1,025 representative laps and 42 that aren't, with no `(null)` row.
-
-> [!NOTE]
-> Only records still in the log can be replayed: in production that's bounded by the topic's retention, and locally by Kafka having no volume (`docker compose down` empties it). Reprocessing also replays failures: bad records still in `f1.laps` are dead-lettered again. The dead-letter topic itself isn't reread, because the processor only consumes `f1.laps`.
-
-> [!NOTE]
-> Always run `--dry-run` first. Resetting offsets changes shared state for every instance in the group, and `--to-offset` or `--to-datetime` can rewind to a specific point instead of the beginning.
-
----
-
 ### 4. Verify
 
 ```bash
@@ -474,3 +361,116 @@ docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-s
 
 > [!WARNING]
 > Replaying a session again, including retrying after a `503`, publishes every lap again. The topic will then contain duplicates.
+
+---
+
+## Stream processor
+
+stream-processor consumes `f1.laps`, stores lap times in Postgres, dead-letters bad records, and can reprocess the topic from the start. The examples assume the [Compose stack](#running-locally) is running and a session has been [replayed](#replay-a-session).
+
+### Consumer group
+
+`services/stream-processor` consumes `f1.laps` as the consumer group `stream-processor` and (for now) logs each `LapEvent`. It deserializes into its own `LapEvent` record rather than sharing ingest's class: the JSON on the topic is the contract, so the two services build and deploy independently.
+
+Run two instances to see partitions split across a group:
+
+    ./gradlew bootJar
+    java -jar build/libs/stream-processor.jar
+    java -jar build/libs/stream-processor.jar --server.port=8082
+    kx kafka-consumer-groups --describe --group stream-processor
+
+> [!NOTE]
+> Parallelism is capped by partition count: `f1.laps` has 3 partitions, so a 4th instance would sit idle. `auto.offset.reset=earliest` only applies when the group has no committed offset; a restarted instance resumes from the group's committed offsets.
+
+> [!WARNING]
+> At this stage, delivery is at-least-once and there is no dead-letter handling; a malformed record blocks its partition. Duplicates are handled in [Lap times in Postgres](#lap-times-in-postgres) and bad records in [Error handling](#error-handling-and-dead-letter-topic).
+
+### Lap times in Postgres
+
+The stream processor writes one row per lap to `stream_processor.lap_times`, keyed by the natural key `(session_key, driver_number, lap_number)`. Durations are stored as integer milliseconds; `timed_lap` marks laps with a time that aren't pit-out laps.
+
+Kafka delivery is at-least-once, and replaying a session publishes the same laps again, so the processor must tolerate duplicates. Writes are upserts (`INSERT ... ON CONFLICT ... DO UPDATE`): processing the same event twice leaves the same row. Replaying a session twice leaves the row count unchanged and only advances `processed_at`.
+
+    docker compose exec postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
+      -c "SELECT count(*), max(processed_at) FROM stream_processor.lap_times;"'
+
+> [!NOTE]
+> The schema is managed by Flyway (`src/main/resources/db/migration`) and applied when the processor starts. The processor owns the `stream_processor` Postgres schema, with its own Flyway history, so its migration versions can't collide with ingest-service's in `public`. Applied migrations are never edited; changes go in a new versioned file.
+
+> [!WARNING]
+> At this stage, records that keep failing are retried briefly, then logged and skipped. Dead-letter handling is added in [Error handling](#error-handling-and-dead-letter-topic).
+
+### Error handling and dead-letter topic
+
+Failures are handled by type:
+
+| Failure | Example | Handling |
+|---|---|---|
+| Bad data | malformed JSON, missing required field, negative ID, empty value | Published to `f1.laps.DLT` immediately; the partition moves on |
+| Infrastructure | Postgres unavailable, deadlock, dropped connection | Retried with exponential backoff (1s → 30s cap) with no attempt limit, until it succeeds; lag grows meanwhile |
+| Unexpected | a bug in the processor | Published to `f1.laps.DLT` immediately |
+
+Only failures known to be transient are retried (Spring's `DataAccessResourceFailureException`, `TransientDataAccessException` and `RecoverableDataAccessException`); everything else is dead-lettered. Retrying an unknown error forever could block a partition on a record that will never succeed.
+
+Required fields (`sessionKey`, `driverNumber`, `lapNumber`, `pitOutLap`) are boxed types in `LapEvent`, so a missing key arrives as `null` and fails validation instead of silently becoming `0` or `false`.
+
+The dead-letter topic is for bad data, not outages: dead-lettering during an outage would fill it with valid laps that need manual replay. Each dead-lettered record keeps its original key and partition and carries headers describing the failure (`kafka_dlt-exception-message`, `kafka_dlt-original-offset`, ...).
+
+    kx kafka-console-consumer --topic f1.laps.DLT --from-beginning --formatter-property print.headers=true
+
+To see each path, keep the consumer above running and send records with `kx kafka-console-producer --topic f1.laps`:
+
+| Path | Send | Result |
+|---|---|---|
+| Poison pill | `{this is not json` | Appears in the DLT as the original bytes; `kafka_dlt-exception-fqcn` is `DeserializationException` |
+| Invalid event | `{}` or `{"sessionKey":9888,"driverNumber":-1,"lapNumber":1,"pitOutLap":false}` | Appears in the DLT re-serialized as a `LapEvent`, with `InvalidLapEventException` as the cause |
+
+In both cases lag returns to 0 and the `lap_times` count is unchanged.
+
+For an outage, stop Postgres, replay a session, then start it again:
+
+    docker compose stop postgres
+    curl -s localhost:8081/actuator/health/readiness   # DOWN (HTTP 503)
+    curl -X POST localhost:8080/api/replays/9888       # ingest doesn't need Postgres; all laps publish
+    kx kafka-consumer-groups --describe --group stream-processor   # LAG rises and holds
+    kx kafka-get-offsets --topic f1.laps.DLT           # unchanged: nothing dead-lettered
+    docker compose start postgres                      # within ~30s (the next retry), LAG drains to 0
+
+`docker compose logs stream-processor` shows `CannotGetJdbcConnectionException` at growing intervals while Postgres is down. Afterwards the `lap_times` count is unchanged and `max(processed_at)` is recent: every lap was reprocessed, and the upserts absorbed the duplicates.
+
+> [!NOTE]
+> `kafka-get-offsets` prints `partition:offset` pairs, where the offset is each partition's log-end offset (the offset the next record will get). With nothing deleted by retention, that equals the partition's record count.
+
+> [!NOTE]
+> Retries are blocking: while a record retries, the rest of its partition waits. This preserves per-driver lap order. Non-blocking retry topics would keep the partition moving but give up that ordering.
+
+> [!WARNING]
+> Nothing consumes the dead-letter topic yet. In production it would be monitored and alerted on, with tooling to inspect and replay fixed records.
+
+### Reprocessing from the log
+
+Kafka keeps records after they're consumed, so changing how the processor computes something doesn't require re-ingesting from OpenF1: rewind the consumer group's offsets and the processor reads the topic again with the new code. The upserts from [Lap times in Postgres](#lap-times-in-postgres) make this safe; reprocessed laps update their rows instead of adding new ones.
+
+The example is `representative_lap`, a column added after laps were already stored: true for timed laps other than lap 1, which starts from the grid. Migration `V2__add_representative_lap.sql` adds it as nullable, so existing rows show `NULL` ("not computed yet") until they're reprocessed. The upsert sets it on conflict as well as on insert, which is what lets a replay fill it for existing rows.
+
+Offsets can only be reset while the group has no active members, so stop the processor first:
+
+    docker compose stop stream-processor
+    kx kafka-consumer-groups --group stream-processor --topic f1.laps --reset-offsets --to-earliest --dry-run
+    kx kafka-consumer-groups --group stream-processor --topic f1.laps --reset-offsets --to-earliest --execute
+    docker compose start stream-processor
+    kx kafka-consumer-groups --describe --group stream-processor   # LAG jumps to the topic size, then drains to 0
+
+Afterwards every row has a value and the row count is unchanged:
+
+    docker compose exec postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -P null="(null)" \
+      -c "SELECT representative_lap, count(*) FROM stream_processor.lap_times GROUP BY 1;"'
+
+For session 9888 that's 1,025 representative laps and 42 that aren't, with no `(null)` row.
+
+> [!NOTE]
+> Only records still in the log can be replayed: in production that's bounded by the topic's retention, and locally by Kafka having no volume (`docker compose down` empties it). Reprocessing also replays failures: bad records still in `f1.laps` are dead-lettered again. The dead-letter topic itself isn't reread, because the processor only consumes `f1.laps`.
+
+> [!NOTE]
+> Always run `--dry-run` first. Resetting offsets changes shared state for every instance in the group, and `--to-offset` or `--to-datetime` can rewind to a specific point instead of the beginning.
+
