@@ -26,11 +26,12 @@ public class LapTimeRepository {
                         sector3_ms,
                         pit_out_lap,
                         timed_lap,
+                        representative_lap,
                         processed_at
                 )
                 VALUES (:sessionKey, :driverNumber, :lapNumber, :lapStartTime,
                         :lapDurationMs, :sector1Ms, :sector2Ms, :sector3Ms,
-                        :pitOutLap, :timedLap, now())
+                        :pitOutLap, :timedLap, :representativeLap, now())
                 ON CONFLICT (session_key, driver_number, lap_number)
                 DO UPDATE SET
                         lap_start_time = EXCLUDED.lap_start_time,
@@ -40,6 +41,7 @@ public class LapTimeRepository {
                         sector3_ms = EXCLUDED.sector3_ms,
                         pit_out_lap = EXCLUDED.pit_out_lap,
                         timed_lap = EXCLUDED.timed_lap,
+                        representative_lap = EXCLUDED.representative_lap,
                         processed_at = now()
                 """)
                 .param("sessionKey", lap.sessionKey())
@@ -52,6 +54,7 @@ public class LapTimeRepository {
                 .param("sector3Ms", lap.sector3Ms())
                 .param("pitOutLap", lap.pitOutLap())
                 .param("timedLap", lap.timedLap())
+                .param("representativeLap", lap.representativeLap())
                 .update();
     }
 

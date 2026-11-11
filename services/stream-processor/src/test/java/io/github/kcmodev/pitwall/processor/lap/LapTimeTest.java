@@ -65,7 +65,30 @@ class LapTimeTest {
         assertThat(LapTime.from(lap(null, 28.1, 33.2, null, false)).timedLap()).isFalse();
     }
 
+    @Test
+    void timedLapAfterLapOneIsRepresentative() {
+        assertThat(LapTime.from(lapNumber(2, 91.234, false)).representativeLap()).isTrue();
+    }
+
+    @Test
+    void lapOneIsNotRepresentativeEvenWhenTimed() {
+        LapTime lap = LapTime.from(lapNumber(1, 98.5, false));
+
+        assertThat(lap.timedLap()).isTrue();
+        assertThat(lap.representativeLap()).isFalse();
+    }
+
+    @Test
+    void untimedLapsAreNotRepresentative() {
+        assertThat(LapTime.from(lapNumber(10, 105.0, true)).representativeLap()).as("pit-out lap").isFalse();
+        assertThat(LapTime.from(lapNumber(10, null, false)).representativeLap()).as("no duration").isFalse();
+    }
+
     private static LapEvent lap(Double duration, Double s1, Double s2, Double s3, boolean pitOut) {
         return new LapEvent(9165, 44, 3, START, duration, s1, s2, s3, pitOut);
+    }
+
+    private static LapEvent lapNumber(int lapNumber, Double duration, boolean pitOut) {
+        return new LapEvent(9165, 44, lapNumber, START, duration, null, null, null, pitOut);
     }
 }
