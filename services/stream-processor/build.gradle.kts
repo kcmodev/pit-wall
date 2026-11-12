@@ -47,4 +47,8 @@ tasks.jar {
 
 tasks.withType<Test> {
     useJUnitPlatform()
+    // Print each test's result, so a CI log shows what ran, not only failures
+    testLogging {
+        events("passed", "skipped", "failed")
+    }
 }
