@@ -2,6 +2,7 @@ package io.github.kcmodev.pitwall.processor.kafka;
 
 import io.github.kcmodev.pitwall.processor.lap.LapEvent;
 import org.apache.kafka.clients.admin.NewTopic;
+import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.serialization.ByteArraySerializer;
 import org.apache.kafka.common.serialization.StringSerializer;
@@ -50,7 +51,11 @@ public class KafkaErrorHandlingConfig {
         var producerFactory = new DefaultKafkaProducerFactory<>(
                 bootProducerFactory.getConfigurationProperties(),
                 new StringSerializer(), valueSerializer);
-        return new KafkaTemplate<>(producerFactory);
+        // With config overrides, the template creates its own copy of the factory and so owns it: Spring's
+        // shutdown of the template closes the producer. A factory passed in as-is would never be closed.
+        // The client.id names the producer in logs and broker metrics (instead of "producer-N").
+        return new KafkaTemplate<>(producerFactory,
+                Map.of(ProducerConfig.CLIENT_ID_CONFIG, "stream-processor-dlt"));
     }
 
     @Bean
