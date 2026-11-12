@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Read-only token: this workflow only checks out code and runs Gradle.
+permissions:
+  contents: read
+
+# A newer push to the same branch or PR cancels the run still in progress.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build and test (${{ matrix.service }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      # Let both services finish, so one failure doesn't hide the other's result.
+      fail-fast: false
+      matrix:
+        service: [ingest-service, stream-processor]
+    defaults:
+      run:
+        working-directory: services/${{ matrix.service }}
+
+    steps:
+      # Third-party actions are pinned to a full commit SHA; a tag can be moved to different code.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+        with:
+          distribution: temurin
+          java-version: 21
+
+      # Caches Gradle's dependencies between runs and validates the Gradle wrapper jar.
+      - uses: gradle/actions/setup-gradle@7296c772c13d12d9871528814b51fb2143c138ef # v6.4.1
+
+      # `build` compiles, runs the tests and assembles the boot jar.
+      - run: ./gradlew build
+
+      - name: Upload test reports
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: test-reports-${{ matrix.service }}
+          path: services/${{ matrix.service }}/build/reports/tests/
+          retention-days: 7
