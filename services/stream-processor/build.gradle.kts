@@ -27,8 +27,10 @@ dependencies {
 
     testImplementation("org.springframework.boot:spring-boot-starter-kafka-test")
     testImplementation("org.springframework.boot:spring-boot-starter-webmvc-test")
-//    testImplementation("org.springframework.boot:spring-boot-starter-flyway-test")
-//    testImplementation("org.springframework.boot:spring-boot-starter-jdbc-test")
+    // Real Kafka and Postgres in Docker for integration tests; versions come from Spring Boot's dependency management
+    testImplementation("org.springframework.boot:spring-boot-testcontainers")
+    testImplementation("org.testcontainers:testcontainers-kafka")
+    testImplementation("org.testcontainers:testcontainers-postgresql")
 
     runtimeOnly("org.postgresql:postgresql")
 

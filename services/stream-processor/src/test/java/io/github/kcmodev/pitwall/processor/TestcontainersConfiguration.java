@@ -16,6 +16,9 @@ import org.testcontainers.utility.DockerImageName;
  * Testcontainers can't parse "name:tag@digest", so the tag lives in a comment; the digest is what pins the image.
  * {@code @ServiceConnection} points Spring Boot's Kafka and DataSource configuration at the containers,
  * overriding the addresses in application.properties.
+ * <p>
+ * The containers are AutoCloseable but deliberately not in try-with-resources: Spring owns them as beans and
+ * closes them when the test context shuts down (Testcontainers' Ryuk container also removes them if the JVM dies).
  */
 @TestConfiguration(proxyBeanMethods = false)
 public class TestcontainersConfiguration {
@@ -30,6 +33,7 @@ public class TestcontainersConfiguration {
 
     @Bean
     @ServiceConnection
+    @SuppressWarnings("resource")   // closed by Spring with the context, see class comment
     PostgreSQLContainer postgres() {
         // postgres:18
         return new PostgreSQLContainer(DockerImageName.parse(
