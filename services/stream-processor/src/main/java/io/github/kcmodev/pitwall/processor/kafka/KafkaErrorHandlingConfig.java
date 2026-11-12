@@ -2,7 +2,6 @@ package io.github.kcmodev.pitwall.processor.kafka;
 
 import io.github.kcmodev.pitwall.processor.lap.LapEvent;
 import org.apache.kafka.clients.admin.NewTopic;
-import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.serialization.ByteArraySerializer;
 import org.apache.kafka.common.serialization.StringSerializer;
@@ -15,6 +14,7 @@ import org.springframework.dao.TransientDataAccessException;
 import org.springframework.kafka.config.TopicBuilder;
 import org.springframework.kafka.core.DefaultKafkaProducerFactory;
 import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.kafka.core.ProducerFactory;
 import org.springframework.kafka.listener.ConsumerRecordRecoverer;
 import org.springframework.kafka.listener.DeadLetterPublishingRecoverer;
 import org.springframework.kafka.listener.DefaultErrorHandler;
@@ -39,15 +39,16 @@ public class KafkaErrorHandlingConfig {
     }
 
     @Bean
-    KafkaTemplate<String, Object> deadLetterTemplate(
-            @Value("${spring.kafka.bootstrap-servers}") String bootstrapServers) {
+    KafkaTemplate<String, Object> deadLetterTemplate(ProducerFactory<?, ?> bootProducerFactory) {
         // A deserialization failure leaves the original raw bytes; any other failure leaves a LapEvent.
         // The serializer is chosen by the type of the value.
         var valueSerializer = new DelegatingByTypeSerializer(Map.of(
                 byte[].class, new ByteArraySerializer(),
                 LapEvent.class, new JacksonJsonSerializer<>()));
+        // Start from Spring Boot's producer configuration (bootstrap servers, security, spring.kafka.producer.*,
+        // and connection details such as Testcontainers' @ServiceConnection) and only swap in our serializers.
         var producerFactory = new DefaultKafkaProducerFactory<>(
-                Map.of(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers),
+                bootProducerFactory.getConfigurationProperties(),
                 new StringSerializer(), valueSerializer);
         return new KafkaTemplate<>(producerFactory);
     }
