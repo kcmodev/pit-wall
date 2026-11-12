@@ -1,5 +1,7 @@
 # pit-wall
 
+[![CI](https://github.com/kcmodev/pit-wall/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/kcmodev/pit-wall/actions/workflows/ci.yml)
+
 **Pit Wall** is an event-driven telemetry platform for Formula 1 data that I'm building in stages. The target architecture: an ingest service replays historical session data from the OpenF1 API into Kafka, and a stream processor turns raw car and timing events into race metrics. The results will be stored in Postgres, served through a REST API, and visualized in Grafana dashboards. The system will run on Kubernetes, with GitHub Actions handling builds, tests, and deployments. I'm building it to get hands-on experience with containers, event streaming, and orchestration, using real-world data I genuinely enjoy working with.
 
 ## Status
