@@ -400,7 +400,7 @@ docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-s
 
 ## Stream processor
 
-stream-processor consumes `f1.laps`, stores lap times in Postgres, dead-letters bad records, and can reprocess the topic from the start. The examples assume the [Compose stack](#running-locally) is running and a session has been [replayed](#replay-a-session).
+stream-processor consumes `f1.laps`, stores lap times in Postgres, dead-letters bad records, and can reprocess the topic from the start. It also runs a Kafka Streams topology for race metrics (see [Race metrics](#race-metrics-kafka-streams)). The examples assume the [Compose stack](#running-locally) is running and a session has been [replayed](#replay-a-session).
 
 ### Consumer group
 
@@ -505,6 +505,21 @@ For session 9888 that's 1,025 representative laps and 42 that aren't, with no `(
 
 > [!NOTE]
 > Always run `--dry-run` first. Resetting offsets changes shared state for every instance in the group, and `--to-offset` or `--to-datetime` can rewind to a specific point instead of the beginning.
+
+### Race metrics (Kafka Streams)
+
+stream-processor also runs a Kafka Streams topology, `RaceMetricsTopology`, which will compute running positions and gaps. It reads `f1.laps` as a second consumer group, `stream-processor-race-metrics` (its `application.id`), separate from the listener's group, so both see every lap. For now it only reads the laps.
+
+    kx kafka-consumer-groups --list                                            # stream-processor and stream-processor-race-metrics
+    kx kafka-consumer-groups --describe --group stream-processor-race-metrics   # LAG 0 once caught up
+    curl -s localhost:8081/actuator/health/liveness                             # "kafkaStreams":{"details":{"state":"RUNNING"},"status":"UP"}
+
+> [!NOTE]
+> Kafka Streams commits its offsets every 30 seconds by default, so right after a replay the group can show lag for up to 30 seconds even though every record was read.
+> On its first start the group has no committed offsets, and Kafka Streams starts from the earliest record, so it reads everything already in `f1.laps`.
+
+> [!NOTE]
+> Kafka Streams' state is part of liveness, not readiness: a Streams client in `ERROR` doesn't recover by itself, and a restart fixes it. Records that aren't valid JSON are logged and skipped (`LogAndContinueExceptionHandler`), since the listener already dead-letters them.
 
 ---
 
