@@ -279,8 +279,18 @@ kubectl exec -n pit-wall postgres-0 -- sh -c 'psql -U "$POSTGRES_USER" -d "$POST
 
 > [!NOTE]
 > stream-processor's `f1.laps` topic is created by ingest-service on startup; until then the processor logs `UNKNOWN_TOPIC_OR_PARTITION` warnings and picks the topic up once it exists.
-> ingest-service may restart or show `0/1` until Postgres is ready. Flyway needs the database at startup, and the database is part of its readiness check.
+> Both services may restart a few times, or show `0/1`, until Postgres and Kafka are reachable. That's deliberate: Flyway needs the database at startup, and with `spring.kafka.admin.fail-fast=true` each service fails startup rather than run without the topics it declares. The database is also part of their readiness checks.
 > If `port-forward` fails with "address already in use", stop whatever else is on port 8080 (e.g. `docker compose down`).
+
+### Smoke test
+
+Deploys, waits for every workload to be ready, sends one lap through `f1.laps` and checks that stream-processor stored it. CI runs it on a fresh kind cluster for every push and pull request, before any image is published. To run it yourself, build and load the images (step 1), then:
+
+```bash
+k8s/smoke-test.sh 0.3.0
+```
+
+Expect `OK: lap for session <n> stored in stream_processor.lap_times` within a minute or two. The argument is the image tag to deploy. If the namespace has no `postgres-credentials` secret, the script creates one with generated credentials, so it also works on a brand-new cluster.
 
 ### Remove
 
