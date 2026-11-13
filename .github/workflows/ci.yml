@@ -76,3 +76,7 @@ jobs:
           context: services/${{ matrix.service }}
           push: false
           tags: pit-wall/${{ matrix.service }}:${{ github.sha }}
+          # Layer cache in GitHub's Actions cache, one scope per service so they don't evict each other.
+          # mode=max also caches the build stage (where the dependency layer lives), not only the final image.
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,scope=${{ matrix.service }},mode=max
