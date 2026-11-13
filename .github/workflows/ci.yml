@@ -53,10 +53,70 @@ jobs:
           path: services/${{ matrix.service }}/build/reports/tests/
           retention-days: 7
 
+  smoke:
+    name: Smoke test on kind
+    # Deploys this commit's images to a throwaway kind cluster on the runner. Runs before the image job,
+    # so an image that can't deploy is never published.
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      KIND_VERSION: v0.33.0
+      KIND_SHA256: aee6151561422756b764a4ae28e7f44cda5af5a9eead3cc9985112b1de8d8e0d
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      # amd64 only, loaded into the runner's Docker instead of pushed. Shares the image job's layer cache,
+      # so whichever of the two builds second finds the dependency and jar layers already built.
+      - name: Build ingest-service image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: services/ingest-service
+          load: true
+          tags: pit-wall/ingest-service:ci
+          cache-from: type=gha,scope=ingest-service
+
+      - name: Build stream-processor image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: services/stream-processor
+          load: true
+          tags: pit-wall/stream-processor:ci
+          cache-from: type=gha,scope=stream-processor
+
+      # The same kind version the README requires; the checksum check fails the job if the download changed.
+      - name: Install kind
+        run: |
+          curl -fsSLo kind "https://github.com/kubernetes-sigs/kind/releases/download/${KIND_VERSION}/kind-linux-amd64"
+          echo "${KIND_SHA256}  kind" | sha256sum --check
+          sudo install kind /usr/local/bin/kind
+
+      # The cluster definition from the repo, so CI runs the same Kubernetes version as local
+      - name: Create cluster
+        run: kind create cluster --config k8s/kind/cluster.yaml --wait 120s
+
+      # No registry involved: copies the images into each node (the Deployments use imagePullPolicy: Never)
+      - name: Load images
+        run: kind load docker-image pit-wall/ingest-service:ci pit-wall/stream-processor:ci --name pit-wall
+
+      - name: Smoke test
+        run: k8s/smoke-test.sh ci
+
+      # The cluster is gone when the job ends, so print what's needed to debug a failure
+      - name: Cluster diagnostics
+        if: failure()
+        run: |
+          kubectl get pods,events -n pit-wall -o wide || true
+          kubectl describe pods -n pit-wall || true
+          kubectl logs -n pit-wall -l app.kubernetes.io/name --all-containers --prefix --tail=200 || true
+
   image:
     name: Image (${{ matrix.service }})
-    # Only build images from code whose tests passed (waits for both services' build jobs).
-    needs: build
+    # Only publish images from code that passed its tests and deployed in the smoke test.
+    needs: smoke
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     # Only this job can write packages. The token's permissions are per job, so the test job stays read-only.

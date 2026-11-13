@@ -15,3 +15,6 @@
 /.claude/settings.local.json
 
 /training-notes/
+
+# Temporary overlay written by k8s/smoke-test.sh
+/k8s/.smoke-overlay/
