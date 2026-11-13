@@ -9,7 +9,8 @@
 - [x] **Docker:** ingest-service and stream-processor containerized, running with PostgreSQL and Kafka via Docker Compose
 - [x] **Kubernetes:** running on a local kind cluster, deployed with Kustomize
 - [x] **Kafka:** ingest-service replays OpenF1 lap data into Kafka on request; stream-processor stores lap times in Postgres, dead-letters bad records, and can reprocess the topic
-- [ ] Stream processing, REST API, Grafana dashboards, CI/CD with GitHub Actions
+- [x] **CI:** GitHub Actions builds and tests both services, smoke-tests the deployment on a kind cluster, and publishes amd64 and arm64 images to GitHub Container Registry
+- [ ] Stream processing, REST API, Grafana dashboards, continuous deployment
 
 ## Contents
 
@@ -19,6 +20,7 @@
 - [Kafka (local)](#kafka-local)
 - [Replay a session](#replay-a-session)
 - [Stream processor](#stream-processor)
+- [Continuous integration](#continuous-integration)
 
 ---
 
@@ -504,3 +506,34 @@ For session 9888 that's 1,025 representative laps and 42 that aren't, with no `(
 > [!NOTE]
 > Always run `--dry-run` first. Resetting offsets changes shared state for every instance in the group, and `--to-offset` or `--to-datetime` can rewind to a specific point instead of the beginning.
 
+---
+
+## Continuous integration
+
+`.github/workflows/ci.yml` runs on every push to `main`, every pull request, and every `v*` tag. Each stage starts only when the previous one passed, so an image is published only after its code passed the tests and deployed to a cluster.
+
+| Job | What it does |
+|---|---|
+| Build and test (one per service) | `./gradlew build`: compiles, runs unit and Testcontainers integration tests, packages the jar |
+| Smoke test on kind | Builds both images, deploys them to a new kind cluster with [`k8s/smoke-test.sh`](#smoke-test), and sends one lap through Kafka into Postgres |
+| Image (one per service) | Builds the image for `linux/amd64` and `linux/arm64` and pushes it to GitHub Container Registry. Pull requests build without pushing |
+
+### Published images
+
+Both images are public, so pulling needs no login:
+
+| Image | Tags |
+|---|---|
+| `ghcr.io/kcmodev/pit-wall/ingest-service` | `sha-<commit>` for every push to `main`, `<version>` (e.g. `0.4.0`) for each release |
+| `ghcr.io/kcmodev/pit-wall/stream-processor` | Same |
+
+```bash
+docker pull ghcr.io/kcmodev/pit-wall/ingest-service:0.4.0
+docker buildx imagetools inspect ghcr.io/kcmodev/pit-wall/ingest-service:0.4.0
+```
+
+The pull picks the image for your machine's architecture. `imagetools inspect` lists both platforms, plus two `unknown/unknown` entries: provenance attestations that record how each image was built (the Actions run, base image digests, commit). Clients skip them when pulling.
+
+> [!NOTE]
+> There's no `latest` tag. Every tag always refers to the same image, so a deploy or rollback names exactly what it runs.
+> The local cluster doesn't use these images yet: [Deploy to the local cluster](#deploy-to-the-local-cluster) builds and loads its own.
