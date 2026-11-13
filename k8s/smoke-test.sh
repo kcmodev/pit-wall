@@ -13,6 +13,14 @@ tag=${1:?usage: $0 <image-tag>}
 ns=pit-wall
 cd "$(dirname "$0")/.."   # repo root
 
+# On any failure, show pod status first: ErrImageNeverPull (image not loaded) or CrashLoopBackOff point
+# straight at the cause, where a rollout timeout alone doesn't
+on_failure() {
+  echo "--- FAILED. Pods in $ns:" >&2
+  kubectl get pods -n "$ns" -o wide >&2 || true
+}
+trap on_failure ERR
+
 # Throwaway overlay: the base, with the tag under test. Kustomize only accepts a relative path to a base,
 # so the overlay lives next to it and is removed on exit.
 overlay=k8s/.smoke-overlay
@@ -68,5 +76,6 @@ for _ in $(seq 30); do
   fi
   sleep 2
 done
-echo "FAILED: lap for session $session not stored within 60s" >&2
+echo "Lap for session $session not stored within 60s" >&2
+on_failure
 exit 1
