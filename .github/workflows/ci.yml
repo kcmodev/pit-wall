@@ -3,9 +3,11 @@ name: CI
 on:
   push:
     branches: [main]
+    # A release tag (v0.4.0) runs the whole pipeline and publishes the version-tagged images.
+    tags: ['v*']
   pull_request:
 
-# Read-only token: this workflow only checks out code and runs Gradle.
+# Read-only token by default; a job that needs more asks for it (the image job pushes to GHCR).
 permissions:
   contents: read
 
@@ -52,11 +54,15 @@ jobs:
           retention-days: 7
 
   image:
-    name: Build image (${{ matrix.service }})
+    name: Image (${{ matrix.service }})
     # Only build images from code whose tests passed (waits for both services' build jobs).
     needs: build
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    # Only this job can write packages. The token's permissions are per job, so the test job stays read-only.
+    permissions:
+      contents: read
+      packages: write
     strategy:
       fail-fast: false
       matrix:
@@ -69,13 +75,38 @@ jobs:
       # Buildx runs builds on BuildKit, which the next steps (layer cache, multi-arch, push) need.
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
-      # Builds the same Dockerfile as local builds. Nothing is pushed yet: this proves the image still builds.
-      - name: Build image
+      # Image tags and OCI labels (source repo, commit, created time), computed from the event:
+      #   push to main       -> sha-<short sha>
+      #   release tag v1.2.3 -> 1.2.3 and sha-<short sha>
+      #   pull request       -> sha-<short sha> (built, never pushed)
+      # Only tags that never move: no "latest", "main" or "1.2", so a tag always means the same image.
+      - name: Image tags
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ghcr.io/${{ github.repository }}/${{ matrix.service }}
+          flavor: latest=false
+          tags: |
+            type=semver,pattern={{version}}
+            type=sha
+
+      # Pull requests can come from forks, so they never get a token that can publish.
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Builds the same Dockerfile as local builds; pushes everything except pull requests.
+      - name: Build and push image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: services/${{ matrix.service }}
-          push: false
-          tags: pit-wall/${{ matrix.service }}:${{ github.sha }}
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
           # Layer cache in GitHub's Actions cache, one scope per service so they don't evict each other.
           # mode=max also caches the build stage (where the dependency layer lives), not only the final image.
           cache-from: type=gha,scope=${{ matrix.service }}
