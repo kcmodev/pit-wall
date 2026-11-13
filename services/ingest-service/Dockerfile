@@ -1,5 +1,8 @@
 # ---- Stage 1: build the jar with the full JDK ----
-FROM eclipse-temurin:21.0.12.1_1-jdk-noble@sha256:70898f0f893a6b772a0f29834d8b022e3ac20b6a0c33a922973cf66342ef56be AS build
+# --platform=$BUILDPLATFORM: this stage always runs on the build machine's own architecture, even when the
+# image is built for another one. A jar is bytecode, the same on every platform, so it's built once, natively,
+# and copied into each platform's runtime stage. Only stage 2 is per-platform.
+FROM --platform=$BUILDPLATFORM eclipse-temurin:21.0.12.1_1-jdk-noble@sha256:70898f0f893a6b772a0f29834d8b022e3ac20b6a0c33a922973cf66342ef56be AS build
 
 WORKDIR /workspace
 
@@ -19,6 +22,7 @@ RUN java -Djarmode=tools -jar /workspace/build/libs/ingest-service.jar extract -
 
 
 # ---- Stage 2: run the jar on a slim JRE ----
+# No --platform: Docker picks the JRE variant for the target platform (amd64 or arm64) from the pinned index digest.
 FROM eclipse-temurin:21.0.12.1_1-jre-noble@sha256:22138efd69393501fccd8176ae16b01791ed71ff801b28f0359415389b17c766
 
 WORKDIR /app
