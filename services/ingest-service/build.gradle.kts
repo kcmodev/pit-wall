@@ -30,10 +30,14 @@ dependencies {
 
 	testImplementation("org.springframework.boot:spring-boot-starter-actuator-test")
 	testImplementation("org.springframework.boot:spring-boot-starter-webmvc-test")
-//	testImplementation("org.springframework.boot:spring-boot-starter-jdbc-test")
-//	testImplementation("org.springframework.boot:spring-boot-starter-flyway-test")
+	// MockRestServiceServer stands in for OpenF1, so tests don't depend on a public API
+	testImplementation("org.springframework.boot:spring-boot-starter-restclient-test")
+	// Real Kafka and Postgres in Docker for integration tests; versions come from Spring Boot's dependency management
+	testImplementation("org.springframework.boot:spring-boot-testcontainers")
+	testImplementation("org.testcontainers:testcontainers-kafka")
+	testImplementation("org.testcontainers:testcontainers-postgresql")
 
-//	testRuntimeOnly("org.junit.platform:junit-platform-launcher")
+	testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 
 tasks.bootJar {
