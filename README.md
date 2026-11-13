@@ -115,7 +115,7 @@ Each app is compiled into its image, so a plain `docker compose up` keeps runnin
 docker compose watch
 ```
 
-Starts the stack, then rebuilds and restarts a service whenever a file under its `src`, `build.gradle.kts` or `settings.gradle.kts` changes (both ingest-service and stream-processor). Postgres and Kafka keep running, and Gradle's cache keeps rebuilds to roughly the compile time. It runs in the foreground; stop watching with Ctrl-C, and use `docker compose ps` to see what's still running.
+Starts the stack, then rebuilds and restarts a service whenever a file under its `src`, `build.gradle.kts` or `settings.gradle.kts` changes (both ingest-service and stream-processor). Postgres and Kafka keep running, and dependencies are cached in their own image layer, so a code change rebuilds in roughly the compile time. It runs in the foreground; stop watching with Ctrl-C, and use `docker compose ps` to see what's still running.
 
 **Run the app on your machine** (fastest restarts, lets you attach a debugger; requires JDK 21):
 

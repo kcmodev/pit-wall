@@ -4,13 +4,16 @@ FROM eclipse-temurin:21.0.12.1_1-jdk-noble@sha256:70898f0f893a6b772a0f29834d8b02
 WORKDIR /workspace
 
 COPY --chmod=0755 gradlew ./
-COPY build.gradle.kts settings.gradle.kts ./
 COPY gradle gradle
+COPY build.gradle.kts settings.gradle.kts ./
+
+# No daemon: it's never reused in a one-off container build
+RUN ./gradlew resolveDependencies --no-daemon
+
 COPY src src
 
-# Cache mount keeps Gradle's distribution and dependency cache between builds (not stored in the image).
-# No daemon: it's never reused in a one-off container build
-RUN --mount=type=cache,target=/root/.gradle ./gradlew bootJar --no-daemon
+# --offline: everything was downloaded above, so a missing dependency fails the build here
+RUN ./gradlew bootJar --no-daemon --offline
 
 RUN java -Djarmode=tools -jar /workspace/build/libs/ingest-service.jar extract --layers --destination extracted
 

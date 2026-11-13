@@ -37,6 +37,19 @@ dependencies {
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 
+// Used by the Dockerfile to download dependencies into their own image layer before the source is copied.
+// Resolves only what compiling and packaging need; test dependencies stay out of the image build.
+tasks.register("resolveDependencies") {
+    group = "build setup"
+    description = "Downloads the dependencies needed to compile and package the app."
+    val classpaths = files(
+        configurations.compileClasspath,
+        configurations.annotationProcessor,
+        configurations.named("productionRuntimeClasspath"),
+    )
+    doLast { classpaths.files }
+}
+
 tasks.bootJar {
     archiveFileName = "stream-processor.jar"
 }
