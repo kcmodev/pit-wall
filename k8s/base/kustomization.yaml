@@ -11,6 +11,6 @@ resources:
   - stream-processor-deployment.yaml
 images:
   - name: pit-wall/ingest-service
-    newTag: "0.3.0"
+    newTag: "0.4.0"
   - name: pit-wall/stream-processor
-    newTag: "0.3.0"
+    newTag: "0.4.0"

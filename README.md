@@ -222,14 +222,14 @@ Deploys ingest-service, stream-processor, PostgreSQL 18 and Kafka into the `pit-
 From the repo root:
 
 ```bash
-docker build -t pit-wall/ingest-service:0.3.0 services/ingest-service
-docker build -t pit-wall/stream-processor:0.3.0 services/stream-processor
-kind load docker-image pit-wall/ingest-service:0.3.0 pit-wall/stream-processor:0.3.0 --name pit-wall
+docker build -t pit-wall/ingest-service:0.4.0 services/ingest-service
+docker build -t pit-wall/stream-processor:0.4.0 services/stream-processor
+kind load docker-image pit-wall/ingest-service:0.4.0 pit-wall/stream-processor:0.4.0 --name pit-wall
 ```
 
 > [!NOTE]
 > There's no registry, so `kind load` copies the image into each node, and the Deployment uses `imagePullPolicy: Never`.
-> Image tags follow each app's version in its `build.gradle.kts`, and must match its `newTag` in `k8s/base/kustomization.yaml`. If the version is no longer `0.3.0`, use the current one in both commands. After code changes, bump the version, build with the new tag, and update `newTag`. Reusing a tag keeps the old image running.
+> Image tags follow each app's version in its `build.gradle.kts`, and must match its `newTag` in `k8s/base/kustomization.yaml`. If the version is no longer `0.4.0`, use the current one in both commands. After code changes, bump the version, build with the new tag, and update `newTag`. Reusing a tag keeps the old image running.
 
 ### 2. Create the database secret
 
@@ -289,7 +289,7 @@ kubectl exec -n pit-wall postgres-0 -- sh -c 'psql -U "$POSTGRES_USER" -d "$POST
 Deploys, waits for every workload to be ready, sends one lap through `f1.laps` and checks that stream-processor stored it. CI runs it on a fresh kind cluster for every push and pull request, before any image is published. To run it yourself, build and load the images (step 1), then:
 
 ```bash
-k8s/smoke-test.sh 0.3.0
+k8s/smoke-test.sh 0.4.0
 ```
 
 Expect `OK: lap for session <n> stored in stream_processor.lap_times` within a minute or two. The argument is the image tag to deploy. If the namespace has no `postgres-credentials` secret, the script creates one with generated credentials, so it also works on a brand-new cluster.
