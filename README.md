@@ -134,6 +134,15 @@ Use the values from `.env`. The app reaches Kafka on `127.0.0.1:9092` by default
 > If ingest-service is already running in Compose, stop it first with `docker compose stop ingest-service`, or `bootRun` fails because port 8080 is taken.
 > `docker compose up --build --wait` still works for a one-off rebuild.
 
+**Run the tests** (requires JDK 21 and a running Docker daemon):
+
+```bash
+cd services/ingest-service && ./gradlew test
+cd services/stream-processor && ./gradlew test
+```
+
+The integration tests use Testcontainers to start their own Kafka and PostgreSQL, from the same image digests as `compose.yaml`, so the Compose stack doesn't need to be running. OpenF1 is replaced by saved responses, so the tests don't call the public API. CI runs the same command for both services on every push and pull request.
+
 ### Stop and reset
 
 | Command                  | Containers    | Database data |
