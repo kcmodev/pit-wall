@@ -28,6 +28,8 @@ dependencies {
     implementation("org.flywaydb:flyway-database-postgresql")
 
     testImplementation("org.springframework.boot:spring-boot-starter-kafka-test")
+    // TopologyTestDriver: runs a topology in-process, without a broker
+    testImplementation("org.apache.kafka:kafka-streams-test-utils")
     testImplementation("org.springframework.boot:spring-boot-starter-webmvc-test")
     // Real Kafka and Postgres in Docker for integration tests; versions come from Spring Boot's dependency management
     testImplementation("org.springframework.boot:spring-boot-testcontainers")
