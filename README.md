@@ -286,13 +286,13 @@ kubectl exec -n pit-wall postgres-0 -- sh -c 'psql -U "$POSTGRES_USER" -d "$POST
 
 ### Smoke test
 
-Deploys, waits for every workload to be ready, sends one lap through `f1.laps` and checks that stream-processor stored it. CI runs it on a fresh kind cluster for every push and pull request, before any image is published. To run it yourself, build and load the images (step 1), then:
+Deploys, waits for every workload to be ready, sends one lap through `f1.laps` and checks that stream-processor stored it and published its position to `f1.lap-positions`. CI runs it on a fresh kind cluster for every push and pull request, before any image is published. To run it yourself, build and load the images (step 1), then:
 
 ```bash
 k8s/smoke-test.sh 0.4.0
 ```
 
-Expect `OK: lap for session <n> stored in stream_processor.lap_times` within a minute or two. The argument is the image tag to deploy. If the namespace has no `postgres-credentials` secret, the script creates one with generated credentials, so it also works on a brand-new cluster.
+Expect `OK: lap for session <n> stored in stream_processor.lap_times`, then `OK: position for session <n> published to f1.lap-positions`, within a few minutes. The argument is the image tag to deploy. If the namespace has no `postgres-credentials` secret, the script creates one with generated credentials, so it also works on a brand-new cluster.
 
 ### Remove
 
@@ -508,18 +508,43 @@ For session 9888 that's 1,025 representative laps and 42 that aren't, with no `(
 
 ### Race metrics (Kafka Streams)
 
-stream-processor also runs a Kafka Streams topology, `RaceMetricsTopology`, which will compute running positions and gaps. It reads `f1.laps` as a second consumer group, `stream-processor-race-metrics` (its `application.id`), separate from the listener's group, so both see every lap. For now it only reads the laps.
+stream-processor also runs a Kafka Streams topology, `RaceMetricsTopology`, that computes each driver's running position at every lap and publishes it to `f1.lap-positions`. It reads `f1.laps` as a second consumer group, `stream-processor-race-metrics` (its `application.id`), separate from the listener's group, so both see every lap.
 
-    kx kafka-consumer-groups --list                                            # stream-processor and stream-processor-race-metrics
-    kx kafka-consumer-groups --describe --group stream-processor-race-metrics   # LAG 0 once caught up
-    curl -s localhost:8081/actuator/health/liveness                             # "kafkaStreams":{"details":{"state":"RUNNING"},"status":"UP"}
+| Step | What it does |
+|---|---|
+| filter | Drops invalid events (same rules as the listener) and laps without a start time or duration, which have no line-crossing time |
+| repartition by session | Re-keys laps by session and writes them through an internal topic, so one task sees every driver in a session |
+| compute positions | Keeps each lap's line crossings in a state store and emits position, gap to the leader and interval to the car ahead |
+
+Laps don't arrive in crossing order (replay sends them by lap, then driver number), so a lap that crossed earlier can push drivers who were already reported down the order. Each driver whose standing changed gets a new record for that lap: `f1.lap-positions` is a stream of updates, and the latest record per session, driver and lap is the current answer. A lap that changes nothing emits nothing, so replaying a session that was already processed adds no records.
+
+    curl -s -X POST localhost:8080/api/replays/9888
+    kx kafka-console-consumer --topic f1.lap-positions --from-beginning --isolation-level read_committed \
+      --formatter-property print.key=true --timeout-ms 10000 2>/dev/null | grep '"lapNumber":56,' \
+      | awk -F'\t' '{last[$1]=$2} END {for (k in last) print last[k]}' | sort -t: -k5 -n | head -5
+
+`awk` keeps the latest lap-56 record per key (`<session>-<driver>`), which is what a consumer upserting the stream would hold, and `sort` orders them by position. Without it you also see superseded records, such as an early `"position":1` for a driver who was later moved down. Expect:
+
+    {"sessionKey":9888,"driverNumber":1,"lapNumber":56,"position":1,"crossingTime":"2025-10-19T20:37:40.558Z","gapToLeaderMs":0,"intervalToCarAheadMs":null}
+    {"sessionKey":9888,"driverNumber":4,"lapNumber":56,"position":2,"crossingTime":"2025-10-19T20:37:48.443Z","gapToLeaderMs":7885,"intervalToCarAheadMs":7885}
+    {"sessionKey":9888,"driverNumber":16,"lapNumber":56,"position":3,"crossingTime":"2025-10-19T20:37:55.877Z","gapToLeaderMs":15319,"intervalToCarAheadMs":7434}
+    {"sessionKey":9888,"driverNumber":44,"lapNumber":56,"position":4,"crossingTime":"2025-10-19T20:38:09.097Z","gapToLeaderMs":28539,"intervalToCarAheadMs":13220}
+    {"sessionKey":9888,"driverNumber":81,"lapNumber":56,"position":5,"crossingTime":"2025-10-19T20:38:10.276Z","gapToLeaderMs":29718,"intervalToCarAheadMs":1179}
+
+For session 9888 (2025 United States GP) this matches the official result. The consumer exits with a `TimeoutException` once `--timeout-ms` passes with no new records; that's expected, and `2>/dev/null` hides it.
+
+The topology runs with exactly-once processing (`processing.guarantee=exactly_once_v2`): each lap's state store update, output records and input offset are committed in one Kafka transaction. Read the output with `--isolation-level read_committed`, the way a downstream consumer should; the default would also show records from aborted transactions. Kafka Streams creates and owns its internal topics:
+
+    kx kafka-topics --list | grep race-metrics   # -laps-by-session-repartition, -lap-crossings-changelog
+    kx kafka-consumer-groups --describe --group stream-processor-race-metrics
+    curl -s localhost:8081/actuator/health/liveness   # "kafkaStreams":{"details":{"state":"RUNNING"},"status":"UP"}
 
 > [!NOTE]
-> Kafka Streams commits its offsets every 30 seconds by default, so right after a replay the group can show lag for up to 30 seconds even though every record was read.
-> On its first start the group has no committed offsets, and Kafka Streams starts from the earliest record, so it reads everything already in `f1.laps`.
+> The state store is RocksDB on local disk (`/tmp/kafka-streams` in the container), and every change is also written to the `-changelog` topic. A new container rebuilds the store from the changelog before processing.
+> On its first start the group has no committed offsets, and Kafka Streams starts from the earliest record in `f1.laps`.
 
 > [!NOTE]
-> Kafka Streams' state is part of liveness, not readiness: a Streams client in `ERROR` doesn't recover by itself, and a restart fixes it. Records that aren't valid JSON are logged and skipped (`LogAndContinueExceptionHandler`), since the listener already dead-letters them.
+> Kafka Streams' state is part of liveness, not readiness: a Streams client in `ERROR` doesn't recover by itself, and a restart fixes it. On Kubernetes, if stream-processor starts before ingest-service has created `f1.laps`, Kafka Streams stops with a missing source topic, liveness fails, and the restarted pod picks the topic up. Records that aren't valid JSON are logged and skipped (`LogAndContinueExceptionHandler`), since the listener already dead-letters them.
 
 ---
 
@@ -530,7 +555,7 @@ stream-processor also runs a Kafka Streams topology, `RaceMetricsTopology`, whic
 | Job | What it does |
 |---|---|
 | Build and test (one per service) | `./gradlew build`: compiles, runs unit and Testcontainers integration tests, packages the jar |
-| Smoke test on kind | Builds both images, deploys them to a new kind cluster with [`k8s/smoke-test.sh`](#smoke-test), and sends one lap through Kafka into Postgres |
+| Smoke test on kind | Builds both images, deploys them to a new kind cluster with [`k8s/smoke-test.sh`](#smoke-test), sends one lap through Kafka, and checks it's stored in Postgres and published as a position |
 | Image (one per service) | Builds the image for `linux/amd64` and `linux/arm64` and pushes it to GitHub Container Registry. Pull requests build without pushing |
 
 ### Published images
