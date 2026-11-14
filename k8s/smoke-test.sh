@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Smoke test: deploys k8s/base with the given image tag, waits until every workload is ready, then sends one
-# lap through Kafka and checks that stream-processor stored it in Postgres. Proves the images start, find
+# lap through Kafka and checks that stream-processor stored it in Postgres and published its position. Proves the images start, find
 # each other and their dependencies inside a real cluster, which unit and integration tests can't.
 #
 # Usage: k8s/smoke-test.sh <image-tag>
@@ -67,15 +67,35 @@ echo "$session-44|$lap" | kubectl exec -i -n "$ns" kafka-0 -c kafka -- \
   --reader-property parse.key=true --reader-property key.separator='|'
 
 echo "--- Waiting for stream-processor to store it"
-for _ in $(seq 30); do
+for attempt in $(seq 30); do
   count=$(kubectl exec -n "$ns" postgres-0 -c postgres -- sh -c \
     "psql -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\" -tAc 'SELECT count(*) FROM stream_processor.lap_times WHERE session_key = $session'")
   if [ "$count" = 1 ]; then
     echo "OK: lap for session $session stored in stream_processor.lap_times"
-    exit 0
+    break
+  fi
+  if [ "$attempt" = 30 ]; then
+    echo "Lap for session $session not stored within 60s" >&2
+    on_failure
+    exit 1
   fi
   sleep 2
 done
-echo "Lap for session $session not stored within 60s" >&2
+
+echo "--- Waiting for Kafka Streams to publish its position"
+# Up to 2 minutes. If stream-processor started before ingest-service created f1.laps, Kafka Streams shut
+# itself down (missing source topic), failed liveness and is being restarted; it then starts from the
+# earliest offset and catches up. read_committed: only records from committed Streams transactions.
+for attempt in $(seq 12); do
+  positions=$(kubectl exec -n "$ns" kafka-0 -c kafka -- \
+    /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic f1.lap-positions \
+    --from-beginning --isolation-level read_committed --timeout-ms 10000 \
+    --formatter-property print.key=true 2>/dev/null || true)
+  if grep -q "^$session-44" <<<"$positions"; then
+    echo "OK: position for session $session published to f1.lap-positions"
+    exit 0
+  fi
+done
+echo "No position for session $session on f1.lap-positions within 2 minutes" >&2
 on_failure
 exit 1
