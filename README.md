@@ -2,7 +2,11 @@
 
 [![CI](https://github.com/kcmodev/pit-wall/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/kcmodev/pit-wall/actions/workflows/ci.yml)
 
-**Pit Wall** is an event-driven telemetry platform for Formula 1 data that I'm building in stages. The target architecture: an ingest service replays historical session data from the OpenF1 API into Kafka, and a stream processor turns raw car and timing events into race metrics. The results will be stored in Postgres, served through a REST API, and visualized in Grafana dashboards. The system will run on Kubernetes, with GitHub Actions handling builds, tests, and deployments. I'm building it to get hands-on experience with containers, event streaming, and orchestration, using real-world data I genuinely enjoy working with.
+**Pit Wall** is an event-driven telemetry platform for Formula 1 data that I'm building in stages. The target architecture: an ingest service replays historical session data from the OpenF1 API into Kafka, and a stream processor turns raw car and timing events into race metrics. The results will be stored in Postgres, served through a REST API, and visualized in Grafana dashboards. The system will run on Kubernetes, with GitHub Actions handling builds, tests, and deployments. I'm building it to get hands-on experience with containers, event streaming, and orchestration, using real-world data I genuinely enjoy working with. It's built with AI assistance (Claude Code) as a pair programmer: I make the design decisions and review every change.
+
+![Pit Wall architecture: OpenF1 API to ingest-service to the f1.laps Kafka topic to stream-processor, which writes lap times to PostgreSQL and publishes running positions to the f1.lap-positions topic, all on Kubernetes and built by GitHub Actions](docs/architecture.png)
+
+*Current architecture. The REST API and Grafana dashboards come in later steps.*
 
 ## Status
 
