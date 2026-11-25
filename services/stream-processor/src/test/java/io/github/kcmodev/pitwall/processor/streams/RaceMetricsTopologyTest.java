@@ -8,10 +8,12 @@ import org.apache.kafka.streams.StreamsConfig;
 import org.apache.kafka.streams.TestInputTopic;
 import org.apache.kafka.streams.TestOutputTopic;
 import org.apache.kafka.streams.TopologyTestDriver;
+import org.apache.kafka.streams.state.KeyValueStore;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.Properties;
 
@@ -27,6 +29,7 @@ class RaceMetricsTopologyTest {
     private static final String LAPS = "f1.laps";
     private static final String POSITIONS = "f1.lap-positions";
     private static final Instant LAP_START = Instant.parse("2023-09-17T12:03:00Z");
+    private static final Duration RETENTION = Duration.ofHours(6);
 
     private TopologyTestDriver driver;
     private TestInputTopic<String, LapEvent> laps;
@@ -35,7 +38,7 @@ class RaceMetricsTopologyTest {
     @BeforeEach
     void startTopology() {
         StreamsBuilder builder = new StreamsBuilder();
-        RaceMetricsTopology.build(builder, LAPS, POSITIONS);
+        RaceMetricsTopology.build(builder, LAPS, POSITIONS, RETENTION);
 
         Properties config = new Properties();
         config.put(StreamsConfig.APPLICATION_ID_CONFIG, "race-metrics-test");
@@ -114,7 +117,45 @@ class RaceMetricsTopologyTest {
         assertThat(positions.isEmpty()).isTrue();
     }
 
+    // --- retention: TopologyTestDriver's wall clock only moves when the test advances it --------------------
+
+    @Test
+    void anEntryUnchangedForTheRetentionPeriodIsRemoved() {
+        pipe(lap(1, 1, 90.0));
+        assertThat(store().get("100-1")).isNotNull();
+
+        driver.advanceWallClockTime(RETENTION.plus(LapPositionProcessor.EXPIRY_CHECK_INTERVAL));
+
+        assertThat(store().get("100-1")).isNull();
+    }
+
+    @Test
+    void anEntryThatKeepsChangingIsKept() {
+        pipe(lap(1, 1, 90.0));
+        driver.advanceWallClockTime(Duration.ofHours(4));
+        pipe(lap(44, 1, 91.0));                               // a new crossing: the entry changed
+        driver.advanceWallClockTime(Duration.ofHours(4));     // 8h since created, 4h since changed
+
+        assertThat(store().get("100-1").crossingMsByDriver()).containsOnlyKeys(1, 44);
+    }
+
+    @Test
+    void aLapArrivingAfterItsEntryExpiredIsTreatedAsNew() {
+        pipe(lap(1, 1, 90.0));
+        positions.readKeyValuesToList();
+        driver.advanceWallClockTime(RETENTION.plus(LapPositionProcessor.EXPIRY_CHECK_INTERVAL));
+
+        pipe(lap(1, 1, 90.0));
+
+        assertThat(positions.readKeyValuesToList()).as("re-emitted, unlike a duplicate within retention")
+                .containsExactly(KeyValue.pair("100-1", position(1, 1, 1, 90.0, 0, null)));
+    }
+
     // --- helpers -------------------------------------------------------------------------------------------
+
+    private KeyValueStore<String, LapCrossings> store() {
+        return driver.getKeyValueStore(LapPositionProcessor.STORE);
+    }
 
     private void pipe(LapEvent lap) {
         laps.pipeInput(lap.sessionKey() + "-" + lap.driverNumber(), lap);

@@ -22,6 +22,7 @@ import org.springframework.kafka.config.StreamsBuilderFactoryBeanConfigurer;
 import org.springframework.kafka.config.TopicBuilder;
 import org.springframework.kafka.support.serializer.JacksonJsonSerde;
 
+import java.time.Duration;
 import java.util.List;
 
 /**
@@ -31,7 +32,7 @@ import java.util.List;
  *   filter               drop invalid laps and laps with no line-crossing time
  *   selectKey            key: session
  *   repartition          internal topic, so every lap of a session reaches the same task
- *   process              LapPositionProcessor + "lap-crossings" store
+ *   process              LapPositionProcessor + "lap-crossings" store (entries expire after a retention period)
  * f1.lap-positions       key: session-driver
  * </pre>
  * {@code @EnableKafkaStreams} makes Spring Boot create a StreamsBuilderFactoryBean from spring.kafka.streams.*.
@@ -47,12 +48,14 @@ public class RaceMetricsTopology {
     @Bean
     KStream<String, LapPosition> lapPositions(StreamsBuilder builder,
                                               @Value("${pitwall.kafka.topics.laps}") String lapsTopic,
-                                              @Value("${pitwall.kafka.topics.lap-positions}") String positionsTopic) {
-        return build(builder, lapsTopic, positionsTopic);
+                                              @Value("${pitwall.kafka.topics.lap-positions}") String positionsTopic,
+                                              @Value("${pitwall.streams.lap-crossings-retention}") Duration retention) {
+        return build(builder, lapsTopic, positionsTopic, retention);
     }
 
     /** Static, so TopologyTestDriver tests build the same topology without Spring. */
-    static KStream<String, LapPosition> build(StreamsBuilder builder, String lapsTopic, String positionsTopic) {
+    static KStream<String, LapPosition> build(StreamsBuilder builder, String lapsTopic, String positionsTopic,
+                                             Duration retention) {
         // Persistent (RocksDB on local disk), with every change also written to a changelog topic in Kafka.
         // After a restart or a rebalance, the store is rebuilt from the changelog.
         builder.addStateStore(Stores.keyValueStoreBuilder(
@@ -68,7 +71,8 @@ public class RaceMetricsTopology {
                 .repartition(Repartitioned.<String, LapEvent>as("laps-by-session")
                         .withKeySerde(Serdes.String())
                         .withValueSerde(jsonSerde(LapEvent.class)))
-                .process(LapPositionProcessor::new, Named.as("compute-positions"), LapPositionProcessor.STORE);
+                .process(() -> new LapPositionProcessor(retention), Named.as("compute-positions"),
+                        LapPositionProcessor.STORE);
 
         positions.to(positionsTopic, Produced.with(Serdes.String(), jsonSerde(LapPosition.class))
                 .withName("positions-sink"));

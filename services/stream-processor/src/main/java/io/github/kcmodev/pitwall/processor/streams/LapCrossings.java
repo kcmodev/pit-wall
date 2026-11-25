@@ -5,6 +5,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 /**
  * Everyone who has completed one lap of one session so far, with the time they crossed the line: the value
@@ -13,21 +14,39 @@ import java.util.Map;
  * <p>
  * Order at the line is by crossing time; drivers with the same time are ordered by driver number, so the
  * result never depends on arrival order.
+ * <p>
+ * {@code lastChangedMs} is when this entry last changed, by the processing clock (not race time). The store's retention removes entries that haven't changed for a while.
+ * <p>
+ * Store values outlive deployments (RocksDB and the changelog), so a new field must read old values. Jackson 3 rejects a missing primitive, so the field is a boxed Long, and a missing value becomes 0: entries written before this field existed count as long expired.
  */
-record LapCrossings(Map<Integer, Long> crossingMsByDriver) {
+record LapCrossings(Map<Integer, Long> crossingMsByDriver, Long lastChangedMs) {
 
     private static final Comparator<Map.Entry<Integer, Long>> CROSSING_ORDER =
             Map.Entry.<Integer, Long>comparingByValue().thenComparing(Map.Entry.comparingByKey());
 
-    static LapCrossings empty() {
-        return new LapCrossings(Map.of());
+    LapCrossings {
+        lastChangedMs = Objects.requireNonNullElse(lastChangedMs, 0L);
     }
 
-    /** A copy with this driver's crossing added, or replaced if the driver already has one for this lap. */
-    LapCrossings with(int driverNumber, long crossingMs) {
+    static LapCrossings empty() {
+        return new LapCrossings(Map.of(), 0L);
+    }
+
+    /**
+     * This driver's crossing added, or replaced if the driver already has a different one for this lap, stamped with {@code nowMs}. Returns this same instance if the driver already has exactly this crossing: nothing changed, so the change time isn't refreshed either.
+     */
+    LapCrossings with(int driverNumber, long crossingMs, long nowMs) {
+        if (Objects.equals(crossingMsByDriver.get(driverNumber), crossingMs)) {
+            return this;
+        }
         Map<Integer, Long> updated = new HashMap<>(crossingMsByDriver);
         updated.put(driverNumber, crossingMs);
-        return new LapCrossings(updated);
+        return new LapCrossings(updated, nowMs);
+    }
+
+    /** True if this entry last changed before {@code cutoffMs}. */
+    boolean unchangedSince(long cutoffMs) {
+        return lastChangedMs < cutoffMs;
     }
 
     /** Position, gap to the leader and interval to the car ahead for every driver, in crossing order. */
